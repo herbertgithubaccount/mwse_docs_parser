@@ -3,7 +3,7 @@
 use std::os::unix::process::parent_id;
 
 use nom::{
-	bytes::complete::{is_not, tag, take_until}, character::complete::{alpha1, char, space0}, error::Error as PError, sequence::{self, delimited, preceded, terminated}, Parser
+	branch::alt, bytes::complete::{is_not, tag, take_until}, character::complete::{alpha1, char, space0}, error::Error as PError, sequence::{self, delimited, preceded, terminated}, Parser
 };
 
 
@@ -53,51 +53,22 @@ impl<'a> From<Comment<'a>> for &'a str {
 	}
 }
 
-
-#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Primitive {
+enum Value<'a> {
+	Table,
+	Custom(&'a str),
 	Bool,
 	Int,
 	Num,
 	Str
 }
-
-impl TryFrom<&str> for ValueType {
-	type Error = ();
-
-	fn try_from(value: &str) -> Result<Self, Self::Error> {
-		if let Ok(prim) = Primitive::try_from(value) {
-			Ok(Self::Primitive(prim))
-		} else {
-			match value {
-				"class" => Ok(Self::Class),
-				"table" => Ok(Self::Table),
-				_ => Err(())
-			}
-		}
-
-	}
-}
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum ValueType {
+enum ValueType<'a> {
+	Value,
 	Class,
-	Primitive(Primitive),
-	Table,
-}
-
-impl TryFrom<&str> for Primitive {
-	type Error = ();
-
-	fn try_from(value: &str) -> Result<Self, Self::Error> {
-		match value {
-			"bool" | "boolean" => Ok(Self::Bool),
-			"number" => Ok(Self::Num),
-			"int" | "integer" => Ok(Self::Int),
-			"string" => Ok(Self::Str),
-			_ => Err(())
-		}
-	}
+	Method,
+	SimpleFn,
+	ComplexFn(&'a str)
 }
 /// Parses a comment (either single line or block).
 /// If `--[[` is encounted without a closing `]]`, then this returns an error.
@@ -119,6 +90,19 @@ fn comment(i: &str) -> Res<Comment> {
 }
 
 macro_rules! key_value_pair {
+	(ignore $key:ident, $value:ident) => {
+		move |inp| {
+			let i = space0(inp)?.0;
+			let i = $key.parse(i)?.0;
+			let i = delimited(space0, char('='), space0).parse(i)?.0;
+			// let i = space0(i)?.0;
+			// let i = char('=')(i)?.0;
+			// let i = space0(i)?.0;
+			let (i, valout) = $value.parse(i)?;
+	
+			Ok((i, valout))
+		}
+	};
 	($key:ident, $value:ident) => {
 		move |inp| {
 			let i = space0(inp)?.0;
@@ -135,21 +119,44 @@ macro_rules! key_value_pair {
 }
 
 
-fn valuetype<'a>(inp: &'a str) -> Res<'a, ValueType> {
-	let mut key = tag("valuetype");
-	let mut valuetype = delimited(char('"'), alpha1, char('"'));
-	let (i, (_, o)) =  key_value_pair!(key, valuetype).parse(inp)?;
+fn valuetype<'a>(inp: &'a str) -> Res<'a, ValueType<'a>> {
 
+	let i = space0(inp)?.0;
+	let i = tag("valuetype")(i)?.0;
+	let i = space0(i)?.0;
+	let i = char('=')(i)?.0;
+	let i = space0(i)?.0;
 
-	// .parse(inp)?
-	if let Ok(vt) = ValueType::try_from(o) {
-		return Ok((i, vt));
+	if let Ok((i, _)) = tag::<_, _, PError<&str>>("class")(i) {
+		Ok((i, ValueType::Class))
+	} else if let Ok((i, _)) = tag::<_, _, PError<&str>>("value")(i) {
+		Ok((i, ValueType::Value))
+	} else if let Ok((i, _)) = tag::<_, _, PError<&str>>("function")(i) {
+		Ok((i, ValueType::SimpleFn))
+	} else {
+		let (i, _) = tag("fun")(i)?;
+		let (i, desc) = is_not("\"")(i)?;
+		Ok((i, ValueType::ComplexFn(desc)))
 	}
-	return Err(nom::Err::Error(nom::error::Error{
-		input: inp,
-		code: nom::error::ErrorKind::Alpha
-	}));
-	
+}
+fn value<'a>(inp: &'a str) -> Res<'a, Value<'a>> {
+
+	let i = space0(inp)?.0;
+	let i = tag("value")(i)?.0;
+	let i = space0(i)?.0;
+	let i = char('=')(i)?.0;
+	let i = space0(i)?.0;
+
+	let (i, kw) = alpha1(i)?;
+	let val = match kw {
+		"bool" | "boolean" => Value::Bool,
+		"table" => Value::Table,
+		"int" | "integer" => Value::Int,
+		"num" | "number" => Value::Num,
+		"string" => Value::Str,
+		_ => Value::Custom(kw)
+	};
+	Ok((i, val))
 }
 
 
@@ -161,6 +168,19 @@ fn valuetype<'a>(inp: &'a str) -> Res<'a, ValueType> {
 // where
 // 	P: Parser<I, Output = O>
 // {
+
+// }
+
+
+// fn inherits()
+
+struct ClassDefn<'a> {
+	inherits: Option<&'a str>,
+	name: &'a str,
+
+}
+
+// fn class_defn(inp: &str) -> ClassDefn {
 
 // }
 
