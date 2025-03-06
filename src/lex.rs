@@ -10,6 +10,7 @@ pub enum Lit<'a> {
 	Bool(bool)
 }
 
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpecialIdent {
@@ -105,18 +106,18 @@ pub enum Punc {
 	LParen,
 	RParen,
 	Eq,
+	Return,
 }
 
 #[derive(PartialEq, Debug)]
 pub enum Token<'a> {
 	Lit(Lit<'a>),
-	Return,
 	Punc(Punc),
 	Ident(&'a str),
 	SpecialIdent(SpecialIdent),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum LexError<'a> {
 	/// Input ended before we could finish processing a token
 	UnterminatedMultiComment,
@@ -127,6 +128,7 @@ pub enum LexError<'a> {
 	/// The input ended while we were expecting this character.
 	ExpectedPunc(Punc),
 	/// We cannot process a token because we have already reached the end of the input.
+	#[default]
 	EndOfInput,
 }
 
@@ -214,8 +216,36 @@ fn get_start<'a>(iter: &mut Iter<'a>) -> Result<(usize, char), LexError<'a>> {
 
 
 #[inline(always)]
-fn parse_str<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Lit<'a>, LexError<'a>> {
-
+fn parse_str<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize, sep: char) -> Result<Token<'a>, LexError<'a>> {
+	// we'll need to rebuild the string in order to properly handle escape characters.
+	let mut chars = String::new();
+	loop {
+		let Some((i, ch)) = iter.next() else { 
+			do yeet LexError::UnterminatedStr(&input[start..])
+		};
+		if ch == sep {
+			break
+		} else if ch == '\n' {
+			do yeet LexError::UnterminatedStr(&input[start..=i])
+		} else if ch == '\\' {
+			match iter.next() {
+				None => do yeet LexError::EndOfInput,
+				Some((_, ch2@('"'|'\\'|'\''))) => chars.push(ch2),
+				Some((_, 't')) => chars.push('\t'),
+				Some((_, 'n')) => chars.push('\n'),
+				Some((_, 'z')) => {
+					println!("\tgot \\z escape character!");
+					while let Some((_, ch2)) = iter.peek() && ch2.is_whitespace() {
+						iter.next();
+					}
+				},
+				Some((_, ch2)) => do yeet LexError::BadEscapeChar(ch2)
+			}
+		} else {
+			chars.push(ch)
+		}
+	}
+	Ok(Token::Lit(Lit::Str(Cow::from(chars))))
 }
 
 #[inline(always)]
@@ -279,52 +309,8 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 		//make it more robust,
 		//and make it handle strings that start with ' instead of "
 		// probably best to refactor it into its own function
-		'"' => {
-			
-			// we'll need to rebuild the string in order to properly handle escape characters.
-			let mut chars = String::new();
-			loop {
-				let Some((_, ch)) = iter.next() else { 
-					do yeet LexError::UnterminatedStr(&input[start..])
-				};
-				match ch {
-					'"' => break,
-					'\n' => do yeet LexError::UnterminatedStr(&input[start..]),
-					// handle escape characters
-					'\\' => {
-						let Some((_, ch2)) = iter.next() else {
-							do yeet LexError::BadEscapeChar(ch)
-						};
-						println!("got escape char: {ch}  next char is {ch2}");
-						match ch2 {
-							'"' | '\\'  => chars.push(ch2),
-							'n' => chars.push('\n'),
-							't' => chars.push('\t'),
-							'z' => {
-								println!("\tgot \\z escape character!");
-								while let Some(&(_, ch3)) = iter.peek() {
-									println!("\t\tnext char is {ch3} ({})", ch3 as u8);
-									if ch3.is_whitespace() {
-										println!("\t\t\tskipped it!");
-										iter.next();
-									} else {
-										break;
-									}
-								}
-								// while matches!(peek_char(iter), Some('\t'|'\n'|' ')) {
-								// 	let res = iter.next();
-								// 	println!("\tskipped {res:?}");
-								// 	// iter.net
-								// }
-							},
-							_ => do yeet LexError::BadEscapeChar(ch2)
-						}
-					},
-					_ => chars.push(ch),
-				}
-			}
-			Ok(Token::Lit(Lit::Str(Cow::from(chars))))
-		},	
+		'"' => parse_str(input, iter, start, '"'),	
+		'\'' => parse_str(input, iter, start, '\''),	
 		// Multiline string literals
 		'[' if next_char_is(iter, '[') => {
 			// we know the next char is a `[`, so might as well eat it.
@@ -386,7 +372,7 @@ pub fn get_tokens<'a>(input: &'a str) -> Result<Vec<Token<'a>>, LexError<'a>> {
 	// because we probably only need to do this once
 	for t in &mut tokens {
 		if let Token::Ident("return") = t {
-			*t = Token::Return;
+			*t = Token::Punc(Punc::Return);
 			break
 		}
 	}

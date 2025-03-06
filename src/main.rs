@@ -8,7 +8,6 @@
 #![feature(try_trait_v2_yeet)]
 #![feature(type_alias_impl_trait)]
 
-
 mod lex;
 type BoxErr = Box<dyn std::error::Error>;
 
@@ -25,18 +24,18 @@ fn main() -> Result<(), BoxErr> {
 	// println!("lexing {input}");
 
 	let tokens = lex::get_tokens(input);
-	println!("Got tokens = {tokens:?}");
 
-	return Ok(());
-
-	
 	if let Ok(tokens) = tokens {
 		println!("printing tokens!");
 		for (i, t) in tokens.iter().enumerate() {
 			println!("\t{i}) {t:?}")
-
 		}
+		dbg!(parse(&tokens));
+
+	} else {
+		println!("Got tokens = {tokens:?}");
 	}
+
 
 	Ok(())
 

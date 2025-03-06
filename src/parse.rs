@@ -2,6 +2,8 @@ use std::{borrow::Cow, default};
 
 use crate::lex::{self, Lit, Punc, SpecialIdent, Token};
 
+use std::ops::Residual as _;
+
 
 #[derive(Debug, Clone, Copy)]
 pub struct Example<'a> {
@@ -61,6 +63,7 @@ pub struct EventPackage<'a> {
 
 
 
+#[derive(Debug)]
 pub enum PackageType<'a> {
 	Class(ClassPackage<'a>),
 	Function(FunctionPackage<'a>),
@@ -70,12 +73,13 @@ pub enum PackageType<'a> {
 	Event(EventPackage<'a>)
 }
 
+#[derive(Debug)]
 pub enum ValueType {
 
 }
 
 
-
+#[derive(Debug)]
 pub struct Package<'a> {
 	/// Name of the package.
 	pub name: &'a str,
@@ -179,7 +183,10 @@ fn parse_fn_arg<'a>(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) ->
 			SpecialIdent::Default => {
 				default = Some(lit);
 			},
-			SpecialIdent::TableParams => todo!("support for table parameters"),
+			SpecialIdent::TableParams => {
+				expect_punc!(iter; Punc::Eq);
+				table_params = Some(parse_fn_args(iter)?);
+			},
 			sp => do yeet ParseErr::UnsupportedKeyword(sp),
 		}
 		// consume the next character
@@ -229,14 +236,6 @@ fn parse_fn_args<'a>(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) -
 	Ok(args)
 }
 
-#[derive(Debug)]
-pub struct FnRet<'a> {
-	pub name: &'a str,
-	pub ty: &'a str,
-	pub optional: bool,
-	pub description: &'a str,
-	pub default: Option<lex::Lit<'a>>,
-}
 
 
 pub fn parse<'a>(tokens: &'a [Token<'a>]) -> Result<Package<'a>, ParseErr<'a>> {
@@ -265,6 +264,8 @@ pub fn parse<'a>(tokens: &'a [Token<'a>]) -> Result<Package<'a>, ParseErr<'a>> {
 	// let mut info = FileInfo{file_type: FileType::Class, description: None};
 
 	let mut iter = tokens.iter().peekable();
+	
+	expect_punc!(iter; Punc::Return, Punc::LBracket);
 
 	while let Some(t) = iter.next() {
 		match t {
@@ -277,20 +278,20 @@ pub fn parse<'a>(tokens: &'a [Token<'a>]) -> Result<Package<'a>, ParseErr<'a>> {
 					SpecialIdent::Returns => {
 						fn_rets = parse_fn_args(&mut iter)?;
 					},
-					SpecialIdent::ValueType => {
+					SpecialIdent::Type => {
 						expect_punc!(iter; Punc::Eq);
 						if let Some(Token::Lit(Lit::Str(s))) = iter.next() {
 							file_type_str = Some(s);
 						} else {
 							panic!("Invalid file type given!!");
 						}
+						expect_punc!(iter; Punc::Comma);
 					}
-					_ => todo!()
+					_ => todo!("support special ident {sp:?}")
 				}
 			},
 			
 			Token::Lit(lit) => todo!(),
-			Token::Return => todo!(),
 			Token::Ident(_) => todo!(),
 			Token::SpecialIdent(_) => todo!(),
 
@@ -307,6 +308,7 @@ pub fn parse<'a>(tokens: &'a [Token<'a>]) -> Result<Package<'a>, ParseErr<'a>> {
 				Punc::RBracket => todo!(),
 				Punc::LParen => todo!(),
 				Punc::RParen => todo!(),
+				_ => todo!()
 			},
 		}
 	}
