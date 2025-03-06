@@ -21,7 +21,8 @@ fn main() -> Result<(), BoxErr> {
 	// let input = include_str!("../docs/namedTypes/mwseMCMSlider/convertToLabelValue.lua");
 	// let input = include_str!("../docs/namedTypes/mwseMCMSetting.lua");
 	// let input = include_str!("../docs/namedTypes/mwseMCMSlider.lua");
-	let input = include_str!("../docs/global/tes3/equip.lua");
+	// let input = include_str!("../docs/global/tes3/equip.lua");
+	let input = include_str!("../docs/events/standard/activate.lua");
 
 	// println!("lexing {input}");
 

@@ -13,15 +13,24 @@ pub enum Lit<'a> {
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpecialIdent {
+pub enum Kw {
+
+
+
+
+
 	Name, 			// len = 4
 	Type, 			// len = 4
 	Libs,			// len = 4
+	Link,			// len = 4
 
 	Value, 			// len = 5
 	Class, 			// len = 5
 	Title,			// len = 5
-
+	Links,			// len = 5,
+	
+	Filter,			// len = 6
+	
 	Default, 		// len = 7
 	Returns, 		// len = 7
 	
@@ -29,8 +38,10 @@ pub enum SpecialIdent {
 	Examples,		// len = 8
 	Optional, 		// len = 8
 	ReadOnly,		// len = 8
-
+	
 	Arguments, 		// len = 9
+	Blockable,		// len = 9
+	EventData,		// len = 9
 	ValueType, 		// len = 9
 	
 	Deprecated,		// len = 10
@@ -43,7 +54,7 @@ pub enum SpecialIdent {
 	Experimental,	// len = 12
 }
 
-impl SpecialIdent {
+impl Kw {
 	/// Tries to get a `SpecialIdent` from an ordinary identifier.
 	/// Current implementation just does string comparisons, but 
 	/// this might change to something more sophisticated later on, if needed
@@ -54,12 +65,18 @@ impl SpecialIdent {
 				"name" => Some(Self::Name),
 				"type" => Some(Self::Type),
 				"libs" => Some(Self::Libs),
+				"link" => Some(Self::Link),
 				_ => None,
 			},
 			5 => match ident {
 				"class" => Some(Self::Class),
 				"value" => Some(Self::Value),
 				"title" => Some(Self::Title),
+				"links" => Some(Self::Links),
+				_ => None,
+			},
+			6 => match ident {
+				"filter" => Some(Self::Filter),
 				_ => None,
 			},
 			7 => match ident {
@@ -76,6 +93,8 @@ impl SpecialIdent {
 			},
 			9 => match ident {
 				"arguments" => Some(Self::Arguments),
+				"blockable" => Some(Self::Blockable),
+				"eventData" => Some(Self::EventData),
 				"valuetype" => Some(Self::ValueType),
 				_ => None,
 			},
@@ -118,7 +137,7 @@ pub enum Token<'a> {
 	Lit(Lit<'a>),
 	Punc(Punc),
 	Ident(&'a str),
-	SpecialIdent(SpecialIdent),
+	Kw(Kw),
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -303,8 +322,8 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 			} 
 
 			// otherwise, it's either a special identifier or a regular identifer
-			match SpecialIdent::try_from_str(ident) {
-				Some(sp) => Ok(Token::SpecialIdent(sp)),
+			match Kw::try_from_str(ident) {
+				Some(sp) => Ok(Token::Kw(sp)),
 				None => Ok(Token::Ident(ident))
 			}
 		},
