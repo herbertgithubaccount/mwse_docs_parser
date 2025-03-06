@@ -18,9 +18,11 @@ pub use parse::*;
 
 fn main() -> Result<(), BoxErr> {
 	// let input = r#"abc = { hi "this is a literal string}"#;
-	let input = include_str!("../docs/namedTypes/mwseMCMSlider/new.lua");
+	// let input = include_str!("../docs/namedTypes/mwseMCMSlider/convertToLabelValue.lua");
+	// let input = include_str!("../docs/namedTypes/mwseMCMSetting.lua");
+	// let input = include_str!("../docs/namedTypes/mwseMCMSlider.lua");
+	let input = include_str!("../docs/global/tes3/equip.lua");
 
-	use lex::SpecialIdent::*;
 	// println!("lexing {input}");
 
 	let tokens = lex::get_tokens(input);
@@ -30,7 +32,8 @@ fn main() -> Result<(), BoxErr> {
 		for (i, t) in tokens.iter().enumerate() {
 			println!("\t{i}) {t:?}")
 		}
-		dbg!(parse(&tokens));
+		let mut peekable = tokens.iter().peekable();
+		dbg!(Package::from_tokens(&mut peekable));
 
 	} else {
 		println!("Got tokens = {tokens:?}");

@@ -20,7 +20,8 @@ pub enum SpecialIdent {
 
 	Value, 			// len = 5
 	Class, 			// len = 5
-	
+	Title,			// len = 5
+
 	Default, 		// len = 7
 	Returns, 		// len = 7
 	
@@ -33,6 +34,7 @@ pub enum SpecialIdent {
 	ValueType, 		// len = 9
 	
 	Deprecated,		// len = 10
+	IsAbstract, 	// len = 10
 	ReturnType, 	// len = 10
 
 	Description, 	// len = 11
@@ -57,6 +59,7 @@ impl SpecialIdent {
 			5 => match ident {
 				"class" => Some(Self::Class),
 				"value" => Some(Self::Value),
+				"title" => Some(Self::Title),
 				_ => None,
 			},
 			7 => match ident {
@@ -78,6 +81,7 @@ impl SpecialIdent {
 			},
 			10 => match ident {
 				"deprecated" => Some(Self::Deprecated),
+				"isAbstract" => Some(Self::IsAbstract),
 				"returntype" => Some(Self::ReturnType),
 				_ => None,
 			},
@@ -156,7 +160,7 @@ fn next_char_is_not(iter: &mut Iter, target: char) -> bool {
 }
 
 #[inline(always)]
-fn number<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize) -> Lit<'a> {
+fn parse_num<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize) -> Lit<'a> {
 	let mut end= start;
 	while let Some((i, '0'..='9')) = iter.peek() {
 		end = *i;
@@ -234,7 +238,7 @@ fn parse_str<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize, sep: char) -
 				Some((_, 't')) => chars.push('\t'),
 				Some((_, 'n')) => chars.push('\n'),
 				Some((_, 'z')) => {
-					println!("\tgot \\z escape character!");
+					// println!("\tgot \\z escape character!");
 					while let Some((_, ch2)) = iter.peek() && ch2.is_whitespace() {
 						iter.next();
 					}
@@ -259,13 +263,13 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 		
 		// numbers
 		'0'..='9' => {
-			Ok(Token::Lit(number(input, iter, start)))
+			Ok(Token::Lit(parse_num(input, iter, start)))
 		},
 		// negative numbers
 		'-' if let Some('0'..='9') = peek_char(iter) => {
 			let start = iter.next().unwrap().0;
 
-			match number(input, iter, start) {
+			match parse_num(input, iter, start) {
 				Lit::Int(n) => Ok(Token::Lit(Lit::Int(-n))),
 				Lit::Num(f) => Ok(Token::Lit(Lit::Num(-f))),
 				_ => unreachable!("This should never happen")
@@ -285,7 +289,7 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 				// Keep iterating until the next character is not a valid identifier character
 				match iter.peek() {
 					// An identifier cannot be the last input
-					None => do yeet LexError::ExpectedPunc(Punc::LBracket),
+					None => do yeet LexError::ExpectedPunc(Punc::Eq),
 					Some((_, '_' | 'a'..='z' | 'A'..='Z' | '0'..='9')) => { iter.next(); },
 					Some((i, _)) => break *i,
 				}
@@ -304,28 +308,25 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 				None => Ok(Token::Ident(ident))
 			}
 		},
-		// string literals
-		//TODO: fix this.
-		//make it more robust,
-		//and make it handle strings that start with ' instead of "
-		// probably best to refactor it into its own function
 		'"' => parse_str(input, iter, start, '"'),	
 		'\'' => parse_str(input, iter, start, '\''),	
 		// Multiline string literals
+		// In this case, we don't need to do any fancy manipulation on the string
+		// Just find out where it ends and return the string slice.
 		'[' if next_char_is(iter, '[') => {
 			// we know the next char is a `[`, so might as well eat it.
-			// we can add to this because it's valid UTF8
+			// we can add 1 because we know `[` is valid UTF8.
 			let start = 1 + iter.next().unwrap().0;
 			loop {
 
 				match iter.next() {
 					None => do yeet LexError::UnterminatedStr(&input[start..]),
 					Some((i, ']')) => {
-						println!("matched ']'");
+						// println!("matched ']'");
 						if let Some((_, ch2)) = iter.peek() {
 							// println!("\tmatched ']'");
 							if *ch2 == ']' {
-								println!("\tmatched a second']'");
+								// println!("\tmatched a second']'");
 								iter.next();
 								break Ok(Token::Lit(Lit::Str(Cow::Borrowed(&input[start..i]))))
 							}
@@ -361,7 +362,7 @@ pub fn get_tokens<'a>(input: &'a str) -> Result<Vec<Token<'a>>, LexError<'a>> {
 		let res = scan_token_internal(input, &mut iter);
 		match res {
 			Ok(t) => {
-				println!("Parsed token {t:?}");
+				// println!("Parsed token {t:?}");
 				tokens.push(t)
 			},
 			Err(LexError::EndOfInput) => break,
