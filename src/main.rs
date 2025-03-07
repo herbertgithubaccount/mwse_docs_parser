@@ -1,6 +1,5 @@
 #![feature(let_chains)]
 #![feature(if_let_guard)]
-#![feature(guard_patterns)]
 #![feature(try_blocks)]
 #![feature(try_trait_v2)]
 #![feature(try_trait_v2_residual)]
@@ -12,33 +11,118 @@ mod lex;
 type BoxErr = Box<dyn std::error::Error>;
 
 mod parse;
+use std::{path::{Path, PathBuf}, pin::Pin};
+
+use log::{debug, error, trace, warn};
 pub use parse::*;
 
+// struct DirPackage
 
+// struct DirDocs {
+// 	packages: Vec<Package>,
+// }
 
-fn main() -> Result<(), BoxErr> {
+pub struct DirTokens {
+}
+
+fn process_str(contents: String, path: &Path) -> Result<bool, BoxErr> {
+	let tokens = match lex::get_tokens(&contents) {
+		Ok(t) => t,
+		Err(e) => {
+			let path = path;
+			warn!("Could not lex {path:?}\n\tError: {e}");
+			return Ok(false)
+		}
+	};
+	debug!("Got tokens {tokens:?}");
+	let mut iter = tokens.iter().peekable();
+	match Package::from_tokens(&mut iter) {
+		Err(ParseErr::BadPkgTy(ty)) => {
+			warn!("Got a package with an invalid type!\n\t\
+				path: {path:?}\n\t\
+				type: {ty}");
+				Ok(false)
+		},
+		Err(e) => {
+			// println!("Error encountered when processing {path:?}:\n\t{e:?}");
+			do yeet format!("Error encountered when processing {path:?}:\n\t{e:?}");
+		},
+		Ok(_) => {
+			// println!("succesfully processed {entry:?}")
+			Ok(true)
+		}
+
+		
+	}
+}
+
+fn process(dir: PathBuf) -> Pin<Box<dyn Future<Output = Result<usize, BoxErr>>>>  {
+	Box::pin(async move {
+
+	let mut stream = tokio::fs::read_dir(dir).await?;
+	let mut num_read = 0;
+	while let Some(entry) = stream.next_entry().await? {
+		// dbg!(entry);
+		// if entry.
+		let ft = entry.file_type().await?;
+		if ft.is_file() {
+			let path = entry.path();
+			let contents = tokio::fs::read_to_string(&path).await?;
+			if process_str(contents, &path)? {
+				num_read += 1;
+			}
+			
+
+		} else if ft.is_dir() {
+			num_read += process(entry.path()).await?;
+		}
+	}
+	println!("read {num_read} files");
+	return Ok(num_read);
+})
+}
+
+#[tokio::main]
+async fn main() -> Result<(), BoxErr> {
+	// use log;
+	env_logger::init();
+	// env_logger::builder().filter_level(log::LevelFilter::Debug)
 	// let input = r#"abc = { hi "this is a literal string}"#;
 	// let input = include_str!("../docs/namedTypes/mwseMCMSlider/convertToLabelValue.lua");
 	// let input = include_str!("../docs/namedTypes/mwseMCMSetting.lua");
 	// let input = include_str!("../docs/namedTypes/mwseMCMSlider.lua");
 	// let input = include_str!("../docs/global/tes3/equip.lua");
-	let input = include_str!("../docs/events/standard/activate.lua");
+	// let input = include_str!("../docs/events/standard/activate.lua");
 
 	// println!("lexing {input}");
 
-	let tokens = lex::get_tokens(input);
+	// let path = PathBuf::from("docs/namedTypes/tes3processManager/detectPresence.lua");
+	// let contents = tokio::fs::read_to_string(&path).await?;
+	// _= dbg!(process_str(contents, &path));
 
-	if let Ok(tokens) = tokens {
-		println!("printing tokens!");
-		for (i, t) in tokens.iter().enumerate() {
-			println!("\t{i}) {t:?}")
+	// return Ok(());
+
+
+	match process(PathBuf::from("docs/namedTypes")).await {
+		Ok(num) => println!("proccessed {num} files!"),
+		Err(e) => {
+			error!("{e}");
 		}
-		let mut peekable = tokens.iter().peekable();
-		dbg!(Package::from_tokens(&mut peekable));
-
-	} else {
-		println!("Got tokens = {tokens:?}");
 	}
+	
+	// let tokens = lex::get_tokens(input);
+
+	// if let Ok(tokens) = tokens {
+	// 	println!("printing tokens!");
+	// 	for (i, t) in tokens.iter().enumerate() {
+	// 		println!("\t{i}) {t:?}")
+	// 	}
+	// 	let mut peekable = tokens.iter().peekable();
+	// 	dbg!(Package::from_tokens(&mut peekable));
+
+	// } else {
+	// 	println!("Got tokens = {tokens:?}");
+	// }
 
 
 	Ok(())

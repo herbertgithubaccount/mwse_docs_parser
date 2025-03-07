@@ -1,23 +1,37 @@
 use std::ops::FromResidual;
 use std::{iter::Peekable, str::CharIndices};
 
+use derive_more::Debug;
 use std::borrow::Cow;
+
+use log::{debug, trace};
 #[derive(PartialEq, PartialOrd, Debug, Clone)]
 pub enum Lit<'a> {
+	#[debug("{_0:?}")]
 	Str(Cow<'a, str>),
+	#[debug("{_0}")]
 	Int(i64),
+	#[debug("{_0}")]
 	Num(f64),
+	#[debug("{_0}")]
 	Bool(bool)
 }
+
+// impl std::fmt::Display for Lit<'_> {
+// 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+// 		match self {
+// 			Lit::Str(val) => write!(f, "\"{val}\""),
+// 			Lit::Int(val) => write!(f, "{val}"),
+// 			Lit::Num(val) => write!(f, "{val}"),
+// 			Lit::Bool(val) => write!(f, "{val}"),
+// 		}
+// 	}
+// }
 
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kw {
-
-
-
-
 
 	Name, 			// len = 4
 	Type, 			// len = 4
@@ -95,6 +109,7 @@ impl Kw {
 				"arguments" => Some(Self::Arguments),
 				"blockable" => Some(Self::Blockable),
 				"eventData" => Some(Self::EventData),
+				"valueType" => Some(Self::ValueType),
 				"valuetype" => Some(Self::ValueType),
 				_ => None,
 			},
@@ -121,16 +136,42 @@ impl Kw {
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Punc {
+	#[debug(",")]
 	Comma,
+	#[debug("[")]
 	LBrace,
+	#[debug("]")]
 	RBrace,
+	#[debug("{{")]
 	LBracket,
+	#[debug("}}")]
 	RBracket,
+	#[debug("(")]
 	LParen,
+	#[debug(")")]
 	RParen,
+	#[debug("=")]
 	Eq,
+	#[debug("returns")]
 	Return,
 }
+// impl std::fmt::Display for Punc {
+// 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+// 		match self {
+// 				Punc::Comma => write!(f, ","),
+// 				Punc::LBrace => write!(f, "["),
+// 				Punc::RBrace => write!(f, "]"),
+// 				Punc::LBracket => write!(f, "{{"),
+// 				Punc::RBracket => write!(f, "}}"),
+// 				Punc::LParen => write!(f, "("),
+// 				Punc::RParen => write!(f, ")"),
+// 				Punc::Eq => write!(f, "="),
+// 				Punc::Return => write!(f, "return"),
+// 			}
+// 	}
+// }
+
+
 
 #[derive(PartialEq, Debug)]
 pub enum Token<'a> {
@@ -139,13 +180,23 @@ pub enum Token<'a> {
 	Ident(&'a str),
 	Kw(Kw),
 }
+// impl std::fmt::Display for Token<'_> {
+// 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+// 		match self {
+// 			Token::Lit(lit) => write!(f, "Lit({lit})"),
+// 			Token::Punc(punc) => write!(f, "Punc({punc})"),
+// 			Token::Ident(id) => write!(f, "Ident(\"{id}\")"),
+// 			Token::Kw(kw) => write!(f, "Kw({kw:?})"),
+// 		}
+// 	}
+// }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub enum LexError<'a> {
+#[derive(Clone, Debug, Default)]
+pub enum LexError {
 	/// Input ended before we could finish processing a token
 	UnterminatedMultiComment,
 	UnexpectedChar(char),
-	UnterminatedStr(&'a str),
+	UnterminatedStr(Box<str>),
 	BadEscapeChar(char),
 
 	/// The input ended while we were expecting this character.
@@ -154,6 +205,14 @@ pub enum LexError<'a> {
 	#[default]
 	EndOfInput,
 }
+
+impl std::fmt::Display for LexError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{self:?}")
+	}
+}
+
+impl std::error::Error for LexError {}
 
 
 
@@ -201,7 +260,7 @@ fn parse_num<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize) -> Lit<'a> {
 }
 
 /// Gets the start of the input, after skipping over comments and whitespace.
-fn get_start<'a>(iter: &mut Iter<'a>) -> Result<(usize, char), LexError<'a>> {
+fn get_start<'a>(iter: &mut Iter<'a>) -> Result<(usize, char), LexError> {
 	loop {
 		let Some((i, ch)) = iter.next() else {
 			do yeet LexError::EndOfInput;
@@ -239,17 +298,17 @@ fn get_start<'a>(iter: &mut Iter<'a>) -> Result<(usize, char), LexError<'a>> {
 
 
 #[inline(always)]
-fn parse_str<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize, sep: char) -> Result<Token<'a>, LexError<'a>> {
+fn parse_str<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize, sep: char) -> Result<Token<'a>, LexError> {
 	// we'll need to rebuild the string in order to properly handle escape characters.
 	let mut chars = String::new();
 	loop {
 		let Some((i, ch)) = iter.next() else { 
-			do yeet LexError::UnterminatedStr(&input[start..])
+			do yeet LexError::UnterminatedStr(Box::from(&input[start..]))
 		};
 		if ch == sep {
 			break
 		} else if ch == '\n' {
-			do yeet LexError::UnterminatedStr(&input[start..=i])
+			do yeet LexError::UnterminatedStr(Box::from(&input[start..=i]))
 		} else if ch == '\\' {
 			match iter.next() {
 				None => do yeet LexError::EndOfInput,
@@ -272,12 +331,12 @@ fn parse_str<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize, sep: char) -
 }
 
 #[inline(always)]
-fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<'a>, LexError<'a>> {
+fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<'a>, LexError> {
 
 	// skip comments and whitespace
 	
 	let (start, first_char) = get_start(iter)?;
-
+	trace!("\tlexing char {first_char}");
 	match first_char {
 		
 		// numbers
@@ -339,7 +398,7 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 			loop {
 
 				match iter.next() {
-					None => do yeet LexError::UnterminatedStr(&input[start..]),
+					None => do yeet LexError::UnterminatedStr(Box::from(&input[start..])),
 					Some((i, ']')) => {
 						// println!("matched ']'");
 						if let Some((_, ch2)) = iter.peek() {
@@ -371,10 +430,10 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 	}
 }
 
-pub fn get_tokens<'a>(input: &'a str) -> Result<Vec<Token<'a>>, LexError<'a>> {
+pub fn get_tokens<'a>(input: &'a str) -> Result<Vec<Token<'a>>, LexError> {
 	let mut tokens = Vec::new();
 
-
+	debug!("lexing tokens of {input}");
 	let mut iter = input.char_indices().peekable();
 
 	loop {
