@@ -4,25 +4,24 @@ use log::{debug, log_enabled, trace};
 use crate::lex::{Kw, Lit, Punc, Token, TokenIter};
 use derive_more::Debug;
 
-use std::iter::Peekable;
 
-#[derive(Debug, Clone, Copy)]
-pub enum ParseErr<'a>{
-	BadToken(&'a Token<'a>),
+#[derive(Debug, Clone)]
+pub enum ParseErr{
+	BadToken(Token),
 	/// The value for this special identifier was not provided.
 	#[debug("UnspecifiedKeyword{{expected: {_1:?}, got: '{_0:?}'}}")]
-	UnspecifiedKeyword(Option<&'a Token<'a>>, Kw),
+	UnspecifiedKeyword(Option<Token>, Kw),
 
 	#[debug("PuncExpected{{expected: {_1:?}, got: '{_0:?}'}}")]
-	PuncExpected(Option<&'a Token<'a>>, Punc),
+	PuncExpected(Option<Token>, Punc),
 	/// A special identifier showed up in a place it shouldn't have.
 	#[debug("UnsupportedKeyword{{expected: {_1:?}, got: '{_0:?}'}}")]
-	UnsupportedKeyword(Option<&'a Token<'a>>, Kw),
-	BadPkgTy(&'a str),
-	UnexpectedLit(&'a Lit<'a>),
-	UnexpectedIdent(&'a str),
+	UnsupportedKeyword(Option<Token>, Kw),
+	BadPkgTy(Box<str>),
+	UnexpectedLit(Lit),
+	UnexpectedIdent(Box<str>),
 	#[debug("InvalidLitType{{kw: {_0:?}, lit: '{_1:?}'}}")]
-	InvalidLitType(Kw, &'a Lit<'a>),
+	InvalidLitType(Kw, Lit),
 
 }
 
@@ -35,14 +34,14 @@ macro_rules! expect_punc {
 			trace!("expecting punc {:?}", $punc);
 			match $iter.next() {
 				Some(Token::Punc($punc)) => (),
-				maybe_token => do yeet ParseErr::PuncExpected(maybe_token, $punc)
+				maybe_token => do yeet ParseErr::PuncExpected(maybe_token.cloned(), $punc)
 			}
 		)*
  	};
 }
 
 /// Eats a punctuation if possible. Returns `true` if it got eaten
-fn munch_if_possible<'a>(iter: &'a TokenIter<'a>, punc: Punc) -> bool {
+fn munch_if_possible(iter: &TokenIter, punc: Punc) -> bool {
 	if let Some(Token::Punc(p)) = iter.peek() && *p == punc {
 		iter.next();
 		true
@@ -54,56 +53,56 @@ fn munch_if_possible<'a>(iter: &'a TokenIter<'a>, punc: Punc) -> bool {
 
 
 
-pub trait FromTokens<'a>: Sized + 'a {
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>>;
+pub trait FromTokens: Sized {
+	fn from_tokens(iter: &TokenIter) -> Result<Self, ParseErr>;
 }
-#[derive(Debug, Clone, Copy)]
-pub struct Example<'a> {
-	pub path: &'a str,
-	pub title: Option<&'a str>,
-	pub description: Option<&'a str>,
+#[derive(Debug, Clone)]
+pub struct Example {
+	pub path: Box<str>,
+	pub title: Option<Box<str>>,
+	pub description: Option<Box<str>>,
 }
 
 /// Creates an example from the tokens. Consumes the path as well.
-impl<'a> FromTokens<'a> for Example<'a> {
+impl FromTokens for Example {
 
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &TokenIter) -> Result<Self, ParseErr> {
 		let path = match iter.next() {
 			Some(Token::Lit(Lit::Str(s))) => s,
-			Some(Token::Ident(id)) => *id,
+			Some(Token::Ident(id)) => id,
 			Some(Token::Punc(Punc::LBrace)) => {
 				let path = match iter.next() {
 					Some(Token::Lit(Lit::Str(s))) => s,
-					t =>  do yeet ParseErr::UnspecifiedKeyword(t, Kw::Title),
+					t =>  do yeet ParseErr::UnspecifiedKeyword(t.cloned(), Kw::Title),
 				};
 				expect_punc!(iter; Punc::RBrace);
 				path
 			},
 			// Some(Token::SpecialIdent(special_ident)) => todo!(),
-			t => do yeet ParseErr::PuncExpected(t, Punc::LBrace)
+			t => do yeet ParseErr::PuncExpected(t.cloned(), Punc::LBrace)
 		};
 		trace!("got path = {path}");
 		expect_punc!(iter; Punc::Eq, Punc::LBracket);
 
-		let mut title: Option<&str> = None;
-		let mut description: Option<&str> = None;
+		let mut title: Option<Box<str>> = None;
+		let mut description: Option<Box<str>> = None;
 		for _ in 1..=2 {
 			match iter.next() {
 				Some(Token::Kw(Kw::Title)) => {
 					expect_punc!(iter; Punc::Eq);
 					title = match iter.next() {
-						Some(Token::Lit(Lit::Str(s))) => Some(s),
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Title),
+						Some(Token::Lit(Lit::Str(s))) => Some(s.clone()),
+						t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(), Kw::Title),
 					};
 				},
 				Some(Token::Kw(Kw::Description)) => {
 					expect_punc!(iter; Punc::Eq);
 					description = match iter.next() {
-						Some(Token::Lit(Lit::Str(s))) => Some(s),
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Description),
+						Some(Token::Lit(Lit::Str(s))) => Some(s.clone()),
+						t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(), Kw::Description),
 					};
 				},
-				t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Title),
+				t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(), Kw::Title),
 			}
 			munch_if_possible(iter, Punc::Comma);
 			if log_enabled!(log::Level::Debug) {
@@ -116,13 +115,13 @@ impl<'a> FromTokens<'a> for Example<'a> {
 		expect_punc!(iter; Punc::RBracket);
 		debug!("next token is {:?}", iter.peek());
 
-		Ok(Example{path, title, description})
+		Ok(Example{path: path.clone(), title, description})
 	}
 }
 
 
-impl<'a> FromTokens<'a> for Vec<Example<'a>> {
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Vec<Example<'a>>, ParseErr<'a>> {
+impl FromTokens for Vec<Example> {
+	fn from_tokens(iter: &TokenIter) -> Result<Vec<Example>, ParseErr> {
 		
 		expect_punc!(iter; Punc::LBracket);
 		
@@ -152,20 +151,20 @@ impl<'a> FromTokens<'a> for Vec<Example<'a>> {
 /// { rightType = "niColor", resultType = "niColor", description = "Adds the color channel values of two `niColor` objects." },
 /// ```
 #[derive(Debug)]
-pub struct Overload<'a> {
-	right_ty: Option<&'a str>,
-	result_ty: Option<&'a str>,
-	description: Option<&'a str>,
+pub struct Overload {
+	right_ty: Option<Box<str>>,
+	result_ty: Option<Box<str>>,
+	description: Option<Box<str>>,
 }
 
 
-impl<'a> FromTokens<'a> for Overload<'a> {
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
+impl FromTokens for Overload {
+	fn from_tokens(iter: &TokenIter) -> Result<Self, ParseErr> {
 		expect_punc!(iter; Punc::LBracket);
 
-		let mut right_ty: Option<&str> = None;
-		let mut result_ty: Option<&str> = None;
-		let mut description: Option<&str> = None;
+		let mut right_ty: Option<Box<str>> = None;
+		let mut result_ty: Option<Box<str>> = None;
+		let mut description: Option<Box<str>> = None;
 		
 		while let Some(token) = iter.next() {
 
@@ -174,7 +173,7 @@ impl<'a> FromTokens<'a> for Overload<'a> {
 				Token::Kw(sp)  => *sp,
 				// End early if we found the closing bracket
 				Token::Punc(Punc::RBracket) => break,
-				_ => do yeet ParseErr::BadToken(token),
+				_ => do yeet ParseErr::BadToken(token.clone()),
 			};
 			trace!("\t\tprocessing {sp:?}");
 
@@ -182,28 +181,28 @@ impl<'a> FromTokens<'a> for Overload<'a> {
 			// The literal to use when initializing the keyword
 			let lit = match iter.next() {
 				Some(Token::Lit(lit))  => lit,
-				token => do yeet ParseErr::UnspecifiedKeyword(token, sp)
+				token => do yeet ParseErr::UnspecifiedKeyword(token.cloned(), sp)
 			};
 
 			match sp {
 				Kw::RightType => {
-					let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::RightType, lit)};
-					right_ty = Some(s);
+					let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::RightType, lit.clone())};
+					right_ty = Some(s.clone());
 					trace!("\tgot name = {right_ty:?}");
 				},
 				Kw::Description => {
-					let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Description, lit)};
-					description = Some(s);
+					let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Description, lit.clone())};
+					description = Some(s.clone());
 					trace!("\tgot description = {description:?}");
 
 				},
 				Kw::ResultType => {
-					let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::ResultType, lit)};
-					result_ty = Some(s);
+					let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::ResultType, lit.clone())};
+					result_ty = Some(s.clone());
 					trace!("\tgot ty = {result_ty:?}");
 
 				},
-				sp => do yeet ParseErr::UnsupportedKeyword(Some(token), sp),
+				sp => do yeet ParseErr::UnsupportedKeyword(Some(token.clone()), sp),
 			}
 			
 			// consume the next character
@@ -212,7 +211,7 @@ impl<'a> FromTokens<'a> for Overload<'a> {
 			match iter.next() {
 				Some(Token::Punc(Punc::Comma)) => continue,
 				Some(Token::Punc(Punc::RBracket)) => break,
-				Some(t) => do yeet ParseErr::BadToken(t),
+				Some(t) => do yeet ParseErr::BadToken(t.clone()),
 				None => do yeet ParseErr::PuncExpected(None, Punc::RBracket)
 			}
 
@@ -222,12 +221,12 @@ impl<'a> FromTokens<'a> for Overload<'a> {
 }
 
 #[derive(Debug)]
-pub struct PackageOperator<'a> {
-	overloads: Vec<Overload<'a>>
+pub struct PackageOperator {
+	overloads: Vec<Overload>
 }
 
-impl<'a> FromTokens<'a> for Vec<Overload<'a>> {
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
+impl FromTokens for Vec<Overload> {
+	fn from_tokens(iter: &TokenIter) -> Result<Self, ParseErr> {
 		
 		expect_punc!(iter; Punc::LBracket);
 		
@@ -251,44 +250,44 @@ impl<'a> FromTokens<'a> for Vec<Overload<'a>> {
 	}
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ClassPackage<'a> {
+#[derive(Debug, Clone)]
+pub struct ClassPackage {
 	/// The type from which this type inherits should be passed here. This will allow the documentation builders to build the proper inheritance chains. For example, when a function accepts tes3mobileActor, because tes3mobileNPC, tes3mobileCreature, and tes3mobilePlayer have inherits = "tes3mobileActor", the docs will be built with tes3mobileNPC, tes3mobileCreature, and tes3mobilePlayer parameters for that function automatically. This saves you the job of figuring out the complete inheritance chains.
-	pub inherits: Option<&'a str>,
+	pub inherits: Option<Box<str>>,
 	///This is a flag for types that can't be accessed normally. There are some types which inherit from abstract ones.
 	pub is_abstract: bool,
 }
 
 
 #[derive(Debug)]
-pub struct ValuePackage<'a>{
+pub struct ValuePackage{
 	pub read_only: bool,
-	pub valuetype: Option<&'a str>,
-	pub default: Option<&'a Lit<'a>>,
+	pub valuetype: Option<Box<str>>,
+	pub default: Option<Lit>,
 
 }
 
 
 /// Stores an argument / return value of a function.
 #[derive(Debug)]
-pub struct FnArg<'a> {
-	pub name: Option<&'a str>,
-	pub ty: Option<&'a str>,
+pub struct FnArg {
+	pub name: Option<Box<str>>,
+	pub ty: Option<Box<str>>,
 	pub optional: bool,
-	pub description: Option<&'a str>,
-	pub default: Option<&'a Lit<'a>>,
-	pub table_params: Option<Vec<FnArg<'a>>>,
+	pub description: Option<Box<str>>,
+	pub default: Option<Lit>,
+	pub table_params: Option<Vec<FnArg>>,
 }
 
 
-impl<'a> FromTokens<'a> for FnArg<'a> {
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
+impl FromTokens for FnArg {
+	fn from_tokens(iter: &TokenIter) -> Result<Self, ParseErr> {
 		expect_punc!(iter; Punc::LBracket);
 
-		let mut name: Option<&str> = None;
-		let mut ty: Option<&str> = None;
+		let mut name: Option<Box<str>> = None;
+		let mut ty: Option<Box<str>> = None;
 		let mut optional = false;
-		let mut description: Option<&str> = None;
+		let mut description: Option<Box<str>> = None;
 		let mut default = None;
 		let mut table_params = None;
 		
@@ -299,7 +298,7 @@ impl<'a> FromTokens<'a> for FnArg<'a> {
 				Token::Kw(sp)  => *sp,
 				// End early if we found the closing bracket
 				Token::Punc(Punc::RBracket) => break,
-				_ => do yeet ParseErr::BadToken(token),
+				_ => do yeet ParseErr::BadToken(token.clone()),
 			};
 			trace!("\t\tprocessing {sp:?}");
 
@@ -312,40 +311,40 @@ impl<'a> FromTokens<'a> for FnArg<'a> {
 				// The literal to use when initializing the keyword
 				let lit = match iter.next() {
 					Some(Token::Lit(lit))  => lit,
-					token => do yeet ParseErr::UnspecifiedKeyword(token, sp)
+					token => do yeet ParseErr::UnspecifiedKeyword(token.cloned(), sp)
 				};
 
 				match sp {
 					Kw::Name => {
-						let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Name, lit)};
-						name = Some(s);
+						let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Name, lit.clone())};
+						name = Some(s.clone());
 						trace!("\tgot name = {name:?}");
 					},
 					Kw::Description => {
-						let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Description, lit)};
-						description = Some(s);
+						let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Description, lit.clone())};
+						description = Some(s.clone());
 						trace!("\tgot description = {description:?}");
 
 					},
 					Kw::Optional => {
-						let Lit::Bool(b) = lit else { do yeet ParseErr::InvalidLitType(Kw::Optional, lit)};
+						let Lit::Bool(b) = lit else { do yeet ParseErr::InvalidLitType(Kw::Optional, lit.clone())};
 						optional = *b;
 						trace!("\tgot optional = {optional:?}");
 
 					},
 					Kw::Type => {
-						let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Type, lit)};
-						ty = Some(s);
+						let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Type, lit.clone())};
+						ty = Some(s.clone());
 						trace!("\tgot ty = {ty:?}");
 
 					},
 					Kw::Default => {
-						default = Some(lit);
+						default = Some(lit.clone());
 						trace!("\tgot default = {default:?}");
 
 					},
 					Kw::TableParams => unreachable!("already processed table params!"),
-					sp => do yeet ParseErr::UnsupportedKeyword(Some(token), sp),
+					sp => do yeet ParseErr::UnsupportedKeyword(Some(token.clone()), sp),
 				}
 			}
 			
@@ -355,7 +354,7 @@ impl<'a> FromTokens<'a> for FnArg<'a> {
 			match iter.next() {
 				Some(Token::Punc(Punc::Comma)) => continue,
 				Some(Token::Punc(Punc::RBracket)) => break,
-				Some(t) => do yeet ParseErr::BadToken(t),
+				Some(t) => do yeet ParseErr::BadToken(t.clone()),
 				None => do yeet ParseErr::PuncExpected(None, Punc::RBracket)
 			}
 
@@ -365,8 +364,8 @@ impl<'a> FromTokens<'a> for FnArg<'a> {
 	}
 }
 
-impl<'a> FnArg<'a> {
-	pub fn from_valuetype(value_type: Option<&'a str>) -> Self {
+impl FnArg {
+	pub fn from_valuetype(value_type: Option<Box<str>>) -> Self {
 		Self{ 
 			name: None, 
 			ty: value_type, 
@@ -377,7 +376,7 @@ impl<'a> FnArg<'a> {
 		}
 	}
 
-	pub fn from_name(name: Option<&'a str>) -> Self {
+	pub fn from_name(name: Option<Box<str>>) -> Self {
 		Self{ 
 			name, 
 			ty: None, 
@@ -389,10 +388,10 @@ impl<'a> FnArg<'a> {
 	}
 }
 
-impl<'a> FromTokens<'a> for Vec<FnArg<'a>> {
+impl FromTokens for Vec<FnArg> {
 
 	/// Parses the list of function arguments, including the opening and closing braces
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Vec<FnArg<'a>>, ParseErr<'a>> {
+	fn from_tokens(iter: &TokenIter) -> Result<Vec<FnArg>, ParseErr> {
 		
 
 		match iter.peek() {
@@ -401,10 +400,10 @@ impl<'a> FromTokens<'a> for Vec<FnArg<'a>> {
 			// Allow specifying the name using a literal string
 			Some(Token::Lit(Lit::Str(ret_name))) => {
 				iter.next();
-				return Ok(vec![FnArg::from_name(Some(ret_name))]);
+				return Ok(vec![FnArg::from_name(Some(ret_name.clone()))]);
 			}
 			
-			t => do yeet ParseErr::PuncExpected(t, Punc::LBracket)
+			t => do yeet ParseErr::PuncExpected(t.cloned(),Punc::LBracket)
 		}
 
 		// Match the second character.
@@ -451,31 +450,31 @@ impl<'a> FromTokens<'a> for Vec<FnArg<'a>> {
 
 
 #[derive(Debug)]
-pub struct FunctionPackage<'a> {
-	pub args: Vec<FnArg<'a>>,
-	pub rets: Vec<FnArg<'a>>,
+pub struct FunctionPackage {
+	pub args: Vec<FnArg>,
+	pub rets: Vec<FnArg>,
 }
 
 #[derive(Debug)]
-pub struct LibPackage<'a> {
-	pub link: Option<&'a str>,
+pub struct LibPackage {
+	pub link: Option<Box<str>>,
 	///For libraries with sub-namespaces such as mwse.mcm, etc., this array contians the nested namespaces.
-	pub sublibs: Option<Vec<LibPackage<'a>>>,
-	// pub rets: Vec<FnArg<'a>>,
+	pub sublibs: Option<Vec<LibPackage>>,
+	// pub rets: Vec<FnArg>,
 }
 
 #[derive(Debug)]
-pub struct EventDatum<'a> {
-	pub name: &'a str,
-	pub ty: Option<&'a str>,
+pub struct EventDatum {
+	pub name: Box<str>,
+	pub ty: Option<Box<str>>,
 	pub read_only: bool,
 	pub optional: bool,
-	pub description: Option<&'a str>,
+	pub description: Option<Box<str>>,
 	// should be an owned literal
-	pub default: Option<&'a Lit<'a>>,
+	pub default: Option<Lit>,
 }
 
-impl<'a> FromTokens<'a> for EventDatum<'a> {
+impl FromTokens for EventDatum {
 	/// Parses stuff like
 	/// ```lua
 	///	["activator"] = {
@@ -484,14 +483,14 @@ impl<'a> FromTokens<'a> for EventDatum<'a> {
 	///		description = "The actor attempting to trigger the event.",
 	///	},
 	/// ```
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &TokenIter) -> Result<Self, ParseErr> {
 		let name = match iter.next() {
 			Some(Token::Lit(Lit::Str(s))) => s,
-			Some(Token::Ident(id)) => *id,
+			Some(Token::Ident(id)) => id,
 			Some(Token::Punc(Punc::LBrace)) => {
 				let path = match iter.next() {
 					Some(Token::Lit(Lit::Str(s))) => s,
-					t =>  do yeet ParseErr::UnspecifiedKeyword(t, Kw::Name),
+					t =>  do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Name),
 				};
 				expect_punc!(iter; Punc::RBrace);
 				path
@@ -499,12 +498,13 @@ impl<'a> FromTokens<'a> for EventDatum<'a> {
 			// TODO: once ownership stuff is sorted out, make this return a string copy
 			// and make it work generically over all keywords, not just specific ones
 			Some(Token::Kw(Kw::Type)) => "type",
-			t => do yeet ParseErr::PuncExpected(t, Punc::LBrace)
+			t => do yeet ParseErr::PuncExpected(t.cloned(),Punc::LBrace)
 		};
+		let name = Box::from(name);
 		expect_punc!(iter; Punc::Eq, Punc::LBracket);
-		let mut ty: Option<&str> = None;
+		let mut ty = None;
 		let mut read_only = false;
-		let mut description: Option<&str> = None;
+		let mut description = None;
 		let mut default: Option<_> = None;
 		let mut optional = false;
 
@@ -515,8 +515,8 @@ impl<'a> FromTokens<'a> for EventDatum<'a> {
 					iter.next();
 					expect_punc!(iter; Punc::Eq);
 					match iter.next() {
-						Some(Token::Lit(Lit::Str(t)))  => ty = Some(t),
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Type),
+						Some(Token::Lit(Lit::Str(t)))  => ty = Some(t.clone()),
+						t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Type),
 					};
 				},
 				Some(Token::Kw(Kw::ReadOnly)) => {
@@ -524,23 +524,23 @@ impl<'a> FromTokens<'a> for EventDatum<'a> {
 					expect_punc!(iter; Punc::Eq);
 					match iter.next() {
 						Some(Token::Lit(Lit::Bool(b)))  => read_only = *b,
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::ReadOnly),
+						t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::ReadOnly),
 					};
 				},
 				Some(Token::Kw(Kw::Description)) => {
 					iter.next();
 					expect_punc!(iter; Punc::Eq);
 					match iter.next() {
-						Some(Token::Lit(Lit::Str(desc)))  => description = Some(desc),
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Description),
+						Some(Token::Lit(Lit::Str(desc)))  => description = Some(desc.clone()),
+						t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Description),
 					};
 				},
 				Some(Token::Kw(Kw::Default)) => {
 					iter.next();
 					expect_punc!(iter; Punc::Eq);
 					match iter.next() {
-						Some(Token::Lit(lit))  => default = Some(lit),
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Default),
+						Some(Token::Lit(lit))  => default = Some(lit.clone()),
+						t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Default),
 					};
 				},
 				Some(Token::Kw(Kw::Optional)) => {
@@ -548,10 +548,10 @@ impl<'a> FromTokens<'a> for EventDatum<'a> {
 					expect_punc!(iter; Punc::Eq);
 					match iter.next() {
 						Some(Token::Lit(Lit::Bool(b)))  => optional = *b,
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Optional),
+						t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Optional),
 					};
 				},
-				Some(t) => do yeet ParseErr::UnspecifiedKeyword(Some(t), Kw::EventData),
+				Some(t) => do yeet ParseErr::UnspecifiedKeyword(Some(t.clone()), Kw::EventData),
 				None => do yeet ParseErr::UnspecifiedKeyword(None, Kw::EventData),
 			}
 			munch_if_possible(iter, Punc::Comma);
@@ -562,7 +562,7 @@ impl<'a> FromTokens<'a> for EventDatum<'a> {
 		
 	}
 }
-impl<'a> FromTokens<'a> for Vec<EventDatum<'a>> {
+impl FromTokens for Vec<EventDatum> {
 	/// Parses stuff like
 	/// ```lua
 	/// eventData = {
@@ -578,7 +578,7 @@ impl<'a> FromTokens<'a> for Vec<EventDatum<'a>> {
 	///		},
 	/// }
 	/// ```
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &TokenIter) -> Result<Self, ParseErr> {
 		expect_punc!(iter; Punc::LBracket);
 		
 		let mut event_data = Vec::new();
@@ -602,53 +602,53 @@ impl<'a> FromTokens<'a> for Vec<EventDatum<'a>> {
 }
 
 #[derive(Debug)]
-pub struct EventLink<'a> {
-	pub name: &'a str,
-	pub path: &'a str,
+pub struct EventLink {
+	pub name: Box<str>,
+	pub path: Box<str>,
 }
 
-impl<'a> FromTokens<'a> for EventLink<'a> {
+impl FromTokens for EventLink {
 	/// parses something like 
 	/// ```lua
 	///# links = {
 	///		["xActivate"] = "mwscript/functions/actor/xActivate",
 	///# }
 	/// ```
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &TokenIter) -> Result<Self, ParseErr> {
 		
 		
 		let name = match iter.next() {
-			Some(Token::Lit(Lit::Str(s))) => s,
-			Some(Token::Ident(id)) => *id,
+			Some(Token::Lit(Lit::Str(s))) => s.clone(),
+			Some(Token::Ident(id)) => id.clone(),
 			Some(Token::Punc(Punc::LBrace)) => {
 				let path = match iter.next() {
 					Some(Token::Lit(Lit::Str(s))) => s,
-					t =>  do yeet ParseErr::UnspecifiedKeyword(t, Kw::Name),
+					t =>  do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Name),
 				};
 				expect_punc!(iter; Punc::RBrace);
-				path
+				path.clone()
 			},
-			t => do yeet ParseErr::PuncExpected(t, Punc::LBrace)
+			t => do yeet ParseErr::PuncExpected(t.cloned(),Punc::LBrace)
 		};
 
 		expect_punc!(iter; Punc::Eq);
 		let path = match iter.next() {
 			Some(Token::Lit(Lit::Str(path))) => path,
-			token => do yeet ParseErr::UnspecifiedKeyword(token, Kw::Link)
+			token => do yeet ParseErr::UnspecifiedKeyword(token.cloned(), Kw::Link)
 		};
 
-		Ok(Self{name, path})
+		Ok(Self{name, path: path.clone()})
 	}
 }
 
-impl<'a> FromTokens<'a> for Vec<EventLink<'a>> {
+impl FromTokens for Vec<EventLink> {
 	/// parses something like 
 	/// ```lua
 	///	links = {
 	///		["xActivate"] = "mwscript/functions/actor/xActivate",
 	///	}
 	/// ```
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &TokenIter) -> Result<Self, ParseErr> {
 		expect_punc!(iter; Punc::LBracket);
 		
 		let mut links = Vec::new();
@@ -668,15 +668,15 @@ impl<'a> FromTokens<'a> for Vec<EventLink<'a>> {
 
 }
 #[derive(Debug)]
-pub struct EventPackage<'a> {
-	pub filter: Option<&'a str>,
+pub struct EventPackage {
+	pub filter: Option<Box<str>>,
 	pub blockable: bool,
-	pub event_data: Vec<EventDatum<'a>>,
-	pub links: Vec<EventLink<'a>>,
-	pub related: Vec<&'a str>,
+	pub event_data: Vec<EventDatum>,
+	pub links: Vec<EventLink>,
+	pub related: Vec<Box<str>>,
 
 	
-	// pub rets: Vec<FnArg<'a>>,
+	// pub rets: Vec<FnArg>,
 }
 
 
@@ -686,26 +686,26 @@ pub struct EventPackage<'a> {
 
 
 #[derive(Debug)]
-pub enum PackageType<'a> {
-	Class(ClassPackage<'a>),
-	Function(FunctionPackage<'a>),
-	Method(FunctionPackage<'a>),
-	Value(ValuePackage<'a>),
-	Lib(LibPackage<'a>),
-	Event(EventPackage<'a>),
-	Operator(PackageOperator<'a>)
+pub enum PackageType {
+	Class(ClassPackage),
+	Function(FunctionPackage),
+	Method(FunctionPackage),
+	Value(ValuePackage),
+	Lib(LibPackage),
+	Event(EventPackage),
+	Operator(PackageOperator)
 }
 
 
 
 #[derive(Debug)]
-pub struct Package<'a> {
+pub struct Package {
 	/// Name of the package.
-	// pub name: &'a str,
+	// pub name: &str,
 	/// Description of the package.
-	pub description: Option<&'a str>,
+	pub description: Option<Box<str>>,
 	/// The type of package, along with information specific to that package.
-	pub ty: PackageType<'a>,
+	pub ty: PackageType,
 	/// Is this part of the experimental API? Default: `false`.
 	pub experimental: bool,
 
@@ -719,7 +719,7 @@ pub struct Package<'a> {
 	pub deprecated: bool,
 
 	///A table containing the examples. Keys are the example's name/path to the example file.
-	pub examples:  Option<Vec<Example<'a>>>,
+	pub examples:  Option<Vec<Example>>,
 }
 
 
@@ -731,27 +731,27 @@ pub struct Package<'a> {
 
 
 
-// fn parse_example<'a>(iter: &'a TokenIter<'a>, path: &'a str) -> Result<Example<'a>, ParseErr<'a>> {
+// fn parse_example(iter: &TokenIter, path: &str) -> Result<Example, ParseErr> {
 // 	expect_punc!(iter; Punc::LBracket);
 // 	let mut title = None;
 // 	let mut description = None;
 // }
 
-impl<'a> FromTokens<'a> for Package<'a> {
-	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
+impl FromTokens for Package {
+	fn from_tokens(iter: &TokenIter) -> Result<Self, ParseErr> {
 			
 		// The value type string. Used to make sure we parsed the file correctly.
-		let mut file_type_str: Option<&'a str> = None;
+		let mut file_type_str: Option<Box<str>> = None;
 
 
-		let mut description: Option<&'a str> = None;
+		let mut description = None;
 		let mut experimental = false;
 		let mut deprecated  = false;
-		let mut examples:  Option<Vec<Example<'a>>> = None;
+		let mut examples:  Option<Vec<Example>> = None;
 		
 		// value specific
-		let mut valuetype: Option<&'a str> = None;
-		let mut default: Option<&'a Lit<'a>> = None;
+		let mut valuetype = None;
+		let mut default: Option<Lit> = None;
 
 
 		// function / method specific 
@@ -761,19 +761,19 @@ impl<'a> FromTokens<'a> for Package<'a> {
 
 		// class specific
 		let mut is_abstract = false;
-		let mut inherits: Option<&str> = None;
+		let mut inherits = None;
 
 		// value specific
 		let mut read_only = false;
 
 		// libs specific
-		let mut link: Option<&str> = None;
+		let mut link = None;
 
 		// event specific
-		let mut filter: Option<&str> = None;
+		let mut filter = None;
 		let mut blockable = false;
 		let mut event_data = Vec::new();
-		let mut related: Vec<&'a str> = Vec::new();
+		let mut related: Vec<Box<str>> = Vec::new();
 		let mut links = Vec::new();
 
 		// let mut info = FileInfo{file_type: FileType::Class, description: None};
@@ -818,35 +818,35 @@ impl<'a> FromTokens<'a> for Package<'a> {
 
 						Kw::Type => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => file_type_str = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Type)
+								Some(Token::Lit(Lit::Str(s))) => file_type_str = Some(s.clone()),
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Type)
 							}
 							// expect_punc!(iter; Punc::Comma);
 						}
 						Kw::Description => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => description = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Description)
+								Some(Token::Lit(Lit::Str(s))) => description = Some(s.clone()),
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Description)
 							}
 						},
 						Kw::ValueType => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => valuetype = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::ValueType)
+								Some(Token::Lit(Lit::Str(s))) => valuetype = Some(s.clone()),
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::ValueType)
 							}
 						},
 						Kw::Class => todo!(),
 						Kw::Inherits => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => inherits = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Inherits)
+								Some(Token::Lit(Lit::Str(s))) => inherits = Some(s.clone()),
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Inherits)
 							}
 						},
 						
 						Kw::Link => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => link = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Link)
+								Some(Token::Lit(Lit::Str(s))) => link = Some(s.clone()),
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Link)
 							}
 						},
 						Kw::Links => {
@@ -856,58 +856,58 @@ impl<'a> FromTokens<'a> for Package<'a> {
 						Kw::IsAbstract => {
 							match iter.next() {
 								Some(Token::Lit(Lit::Bool(b))) => is_abstract = *b,
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::IsAbstract)
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::IsAbstract)
 							}
 						},
 						Kw::ReadOnly => {
 							match iter.next() {
 								Some(Token::Lit(Lit::Bool(b))) => read_only = *b,
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::ReadOnly)
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::ReadOnly)
 							}
 						},
 
 						Kw::Deprecated => {
 							match iter.next() {
 								Some(Token::Lit(Lit::Bool(b))) => deprecated = *b,
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Deprecated)
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Deprecated)
 							}
 						},
 						
 						Kw::Experimental => {
 							match iter.next() {
 								Some(Token::Lit(Lit::Bool(b))) => experimental = *b,
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Experimental)
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Experimental)
 							}
 						},
 						Kw::Blockable => {
 							match iter.next() {
 								Some(Token::Lit(Lit::Bool(b))) => blockable = *b,
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Blockable)
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Blockable)
 							}
 						},
 						Kw::Filter => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => filter = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Filter)
+								Some(Token::Lit(Lit::Str(s))) => filter = Some(s.clone()),
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Filter)
 							}
 						},
 
 						Kw::Default => {
 							match iter.next() {
-								Some(Token::Lit(lit)) => default = Some(&lit),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Default)
+								Some(Token::Lit(lit)) => default = Some(lit.clone()),
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Default)
 							}
 						},
 						Kw::ReturnType => {
 							match iter.next() {
 								Some(Token::Lit(Lit::Str(ret_ty))) => {
 									if fn_rets.len() > 0 {
-										fn_rets[0].ty = Some(&ret_ty);
+										fn_rets[0].ty = Some(ret_ty.clone());
 									} else {
-										fn_rets = vec![FnArg::from_valuetype(Some(ret_ty))];
+										fn_rets = vec![FnArg::from_valuetype(Some(Box::from(ret_ty.clone())))];
 									}
 								},
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Default)
+								t => do yeet ParseErr::UnspecifiedKeyword(t.cloned(),Kw::Default)
 							}
 						},
 						Kw::Related => {
@@ -915,7 +915,7 @@ impl<'a> FromTokens<'a> for Package<'a> {
 							loop {
 								match iter.peek() {
 									Some(Token::Lit(Lit::Str(s))) => {
-										related.push(s);
+										related.push(s.clone());
 										iter.next();
 										munch_if_possible(iter, Punc::Comma);
 									},
@@ -923,19 +923,19 @@ impl<'a> FromTokens<'a> for Package<'a> {
 										iter.next();
 										break;
 									},
-									t => do yeet ParseErr::PuncExpected(t, Punc::RBracket),
+									t => do yeet ParseErr::PuncExpected(t.cloned(),Punc::RBracket),
 								}
 							}
 						},
 						
-						sp => do yeet ParseErr::UnsupportedKeyword(Some(t), sp)
+						sp => do yeet ParseErr::UnsupportedKeyword(Some(t.clone()), sp)
 						// sp => todo!("Support kw: {sp:?}")
 					}
 
 				},
 				
-				Token::Lit(lit) => do yeet ParseErr::UnexpectedLit(lit), 
-				Token::Ident(id) => do yeet ParseErr::UnexpectedIdent(id), 
+				Token::Lit(lit) => do yeet ParseErr::UnexpectedLit(lit.clone()), 
+				Token::Ident(id) => do yeet ParseErr::UnexpectedIdent(id.clone()), 
 
 				Token::Punc(punc) => match punc {
 					Punc::Eq => {
@@ -972,18 +972,19 @@ impl<'a> FromTokens<'a> for Package<'a> {
 		let file_type_str = file_type_str.expect("Error: no valuetype specified!");
 
 		// valuetype is sometimes used to specify function returns
+		// TODO: this clone does not need to happen
 		if valuetype.is_some() {
 			if fn_rets.len() == 0 {
-				fn_rets = vec![FnArg::from_valuetype(valuetype)];
+				fn_rets = vec![FnArg::from_valuetype(valuetype.clone())];
 			} else {
 				assert!(fn_rets.len() == 1, "Error: Cannot specify both valuetype and returns");
 				assert!(fn_rets[0].ty.is_none(), "Error: Cannot specify both valuetype and returns");
-				fn_rets[0].ty = valuetype;
+				fn_rets[0].ty = valuetype.clone();
 			}
 		}
 		debug!("returning packagetype {file_type_str}");
 		// TODO: trigger error if value does not match parsed parameters
-		let ty = match file_type_str {
+		let ty = match file_type_str.as_ref() {
 			"class" => PackageType::Class(ClassPackage{is_abstract, inherits}),
 			"function" => PackageType::Function(FunctionPackage{args: fn_args, rets: fn_rets}),
 			"method" => PackageType::Method(FunctionPackage{args: fn_args, rets: fn_rets}),
@@ -991,7 +992,7 @@ impl<'a> FromTokens<'a> for Package<'a> {
 			"lib" => PackageType::Lib(LibPackage{link, sublibs: None}),
 			"event" => PackageType::Event(EventPackage{filter, blockable, event_data, links, related}),
 			"operator" => PackageType::Operator(PackageOperator{overloads}),
-			_ => do yeet ParseErr::BadPkgTy(file_type_str)
+			_ => do yeet ParseErr::BadPkgTy(Box::from(file_type_str))
 			// _ => do yeet ParseErr{token}
 		};
 

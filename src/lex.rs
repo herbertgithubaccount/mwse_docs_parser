@@ -7,9 +7,9 @@ use std::borrow::Cow;
 
 use log::{debug, trace};
 #[derive(PartialEq, PartialOrd, Debug, Clone)]
-pub enum Lit<'a> {
+pub enum Lit {
 	#[debug("{_0:?}")]
-	Str(Cow<'a, str>),
+	Str(Box<str>),
 	#[debug("{_0}")]
 	Int(i64),
 	#[debug("{_0}")]
@@ -189,11 +189,11 @@ pub enum Punc {
 
 
 
-#[derive(PartialEq, Debug)]
-pub enum Token<'a> {
-	Lit(Lit<'a>),
+#[derive(PartialEq, Debug, Clone)]
+pub enum Token{
+	Lit(Lit),
 	Punc(Punc),
-	Ident(&'a str),
+	Ident(Box<str>),
 	Kw(Kw),
 }
 // impl std::fmt::Display for Token<'_> {
@@ -257,8 +257,7 @@ fn next_char_is_not(iter: &mut Iter, target: char) -> bool {
 }
 
 #[inline(always)]
-fn parse_num<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize) -> Result<Lit<'a>, LexError> {
-	let mut end= start;
+fn parse_num<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize) -> Result<Lit, LexError> {
 	let end = loop {
 		match iter.peek() {
 			Some((_, '0'..='9'|'-'|'+'|'e')) => {iter.next();}, 
@@ -335,7 +334,7 @@ fn get_start<'a>(iter: &mut Iter<'a>) -> Result<(usize, char), LexError> {
 
 
 #[inline(always)]
-fn parse_str<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize, sep: char) -> Result<Token<'a>, LexError> {
+fn parse_str<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize, sep: char) -> Result<Token, LexError> {
 	// we'll need to rebuild the string in order to properly handle escape characters.
 	let mut chars = String::new();
 	loop {
@@ -364,11 +363,11 @@ fn parse_str<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize, sep: char) -
 			chars.push(ch)
 		}
 	}
-	Ok(Token::Lit(Lit::Str(Cow::from(chars))))
+	Ok(Token::Lit(Lit::Str(chars.into_boxed_str())))
 }
 
 #[inline(always)]
-fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<'a>, LexError> {
+fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token, LexError> {
 
 	// skip comments and whitespace
 	
@@ -422,7 +421,7 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 			// otherwise, it's either a special identifier or a regular identifer
 			match Kw::try_from_str(ident) {
 				Some(sp) => Ok(Token::Kw(sp)),
-				None => Ok(Token::Ident(ident))
+				None => Ok(Token::Ident(Box::from(ident)))
 			}
 		},
 		'"' => parse_str(input, iter, start, '"'),	
@@ -445,7 +444,7 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 							if *ch2 == ']' {
 								// println!("\tmatched a second']'");
 								iter.next();
-								break Ok(Token::Lit(Lit::Str(Cow::Borrowed(&input[start..i]))))
+								break Ok(Token::Lit(Lit::Str(Box::from(&input[start..i]))))
 							}
 						}
 					},
@@ -470,15 +469,15 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 }
 
 #[derive(Debug)]
-pub struct TokenIter<'a> {
-	tokens: Vec<Token<'a>>,
+pub struct TokenIter {
+	tokens: Vec<Token>,
 	/// Index of next token.
 	idx: Cell<usize>,
 }
 
-impl<'a> TokenIter<'a> {
+impl TokenIter {
 
-	pub fn from_input(input: &'a str) -> Result<TokenIter<'a>, LexError> {
+	pub fn from_input(input: &str) -> Result<TokenIter, LexError> {
 		let mut tokens = Vec::new();
 
 		debug!("lexing tokens of {input}");
@@ -498,7 +497,7 @@ impl<'a> TokenIter<'a> {
 		// do the conversion now instead of when each token is created
 		// because we probably only need to do this once
 		for t in &mut tokens {
-			if let Token::Ident("return") = t {
+			if let Token::Ident(s) = t && s.as_ref() == "return" {
 				*t = Token::Punc(Punc::Return);
 				break
 			}
@@ -506,17 +505,17 @@ impl<'a> TokenIter<'a> {
 		Ok(Self::new(tokens))
 	}
 
-	pub fn new(tokens: Vec<Token<'a>>) -> Self {
+	pub fn new(tokens: Vec<Token>) -> Self {
 		Self {idx: Cell::new(0), tokens }
 	}
 
-	pub fn peek(&self) -> Option<&Token<'a>> {
+	pub fn peek(&self) -> Option<&Token> {
 		self.tokens.get(self.idx.get())
 	}
-	pub fn peek2(&self) -> Option<&Token<'a>> {
+	pub fn peek2(&self) -> Option<&Token> {
 		self.tokens.get(1 + self.idx.get())
 	}
-	pub fn next(&self) -> Option<&Token<'a>> {
+	pub fn next(&self) -> Option<&Token> {
 		let idx = self.idx.get();
 		if let Some(t) = self.tokens.get(idx) {
 			self.idx.set(idx + 1);
