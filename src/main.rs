@@ -26,7 +26,7 @@ pub struct DirTokens {
 }
 
 fn process_str(contents: String, path: &Path) -> Result<bool, BoxErr> {
-	let tokens = match lex::TokenIter::from_input(&contents) {
+	let mut iter = match lex::TokenIter::from_input(&contents) {
 		Ok(t) => t,
 		Err(e) => {
 			let path = path;
@@ -34,10 +34,9 @@ fn process_str(contents: String, path: &Path) -> Result<bool, BoxErr> {
 			return Ok(false)
 		}
 	};
-	debug!("Got tokens {tokens:?}");
+	debug!("Got tokens {:?}", iter.as_slice());
 	// let mut iter = tokens.iter().peekable();
-	let iter = tokens;
-	match Package::from_tokens(&iter) {
+	match Package::from_tokens(&mut iter) {
 		Err(ParseErr::BadPkgTy(ty)) => {
 			warn!("Got a package with an invalid type!\n\t\
 				path: {path:?}\n\t\
@@ -134,8 +133,7 @@ async fn main() -> Result<(), BoxErr> {
 	}
 	let elapsed = now.elapsed();
 	
-	println!("processed {total} files");
-    println!("Time elapsed: {:.2?}", elapsed);
+	println!("Processed {total} files in {elapsed:.2?}.");
 	// let tokens = lex::get_tokens(input);
 
 	// if let Ok(tokens) = tokens {

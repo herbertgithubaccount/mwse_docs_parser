@@ -67,7 +67,6 @@ pub enum Kw {
 	
 	Deprecated,		// len = 10
 	IsAbstract, 	// len = 10
-	ReturnType, 	// len = 10
 
 	/// Used in operator overloads
 	ResultType,		// len = 10
@@ -122,7 +121,7 @@ impl Kw {
 				"blockable" => Some(Self::Blockable),
 				"eventData" => Some(Self::EventData),
 				"overloads" => Some(Self::Overloads),
-				"valueType" => Some(Self::ValueType),
+				// "valueType" => Some(Self::ValueType),
 				"valuetype" => Some(Self::ValueType),
 				"rightType" => Some(Self::RightType),
 				_ => None,
@@ -130,14 +129,13 @@ impl Kw {
 			10 => match ident {
 				"deprecated" => Some(Self::Deprecated),
 				"isAbstract" => Some(Self::IsAbstract),
-				"returntype" => Some(Self::ReturnType),
 				"resultType" => Some(Self::ResultType),
 				_ => None,
 			},
 			11 => match ident {
 				"description" => Some(Self::Description),
 				"tableParams" => Some(Self::TableParams),
-				"tableparams" => Some(Self::TableParams),
+				// "tableparams" => Some(Self::TableParams),
 				_ => None,
 			},
 			12 => match ident {
@@ -145,6 +143,41 @@ impl Kw {
 				_ => None,
 			},
 			_ => None,
+		}
+	}
+
+	/// Gets a boxed string that contains the text corresponding to this keyword.
+	#[inline(always)]
+	pub fn boxed_str(self) -> Box<str> {
+		match self {
+			Self::Name => Box::from("name"),
+			Self::Type => Box::from("type"),
+			Self::Libs => Box::from("libs"),
+			Self::Link => Box::from("link"),
+			Self::Class => Box::from("class"),
+			Self::Value => Box::from("value"),
+			Self::Title => Box::from("title"),
+			Self::Links => Box::from("links"),
+			Self::Filter => Box::from("filter"),
+			Self::Default => Box::from("default"),
+			Self::Returns => Box::from("returns"),
+			Self::Related => Box::from("related"),
+			Self::Inherits => Box::from("inherits"),
+			Self::Examples => Box::from("examples"),
+			Self::Optional => Box::from("optional"),
+			Self::ReadOnly => Box::from("readOnly"),
+			Self::Arguments => Box::from("arguments"),
+			Self::Blockable => Box::from("blockable"),
+			Self::EventData => Box::from("eventData"),
+			Self::Overloads => Box::from("overloads"),
+			Self::ValueType => Box::from("valueType"),
+			Self::RightType => Box::from("rightType"),
+			Self::Deprecated => Box::from("deprecated"),
+			Self::IsAbstract => Box::from("isAbstract"),
+			Self::ResultType => Box::from("resultType"),
+			Self::Description => Box::from("description"),
+			Self::TableParams => Box::from("tableParams"),
+			Self::Experimental => Box::from("experimental"),
 		}
 	}
 }
@@ -470,9 +503,7 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token,
 
 #[derive(Debug)]
 pub struct TokenIter {
-	tokens: Vec<Token>,
-	/// Index of next token.
-	idx: Cell<usize>,
+	iter: std::vec::IntoIter<Token>,
 }
 
 impl TokenIter {
@@ -504,25 +535,21 @@ impl TokenIter {
 		}
 		Ok(Self::new(tokens))
 	}
-
+	pub fn as_slice(&self) -> &[Token] {
+		self.iter.as_slice()
+	}
 	pub fn new(tokens: Vec<Token>) -> Self {
-		Self {idx: Cell::new(0), tokens }
+		Self {iter: tokens.into_iter() }
 	}
 
 	pub fn peek(&self) -> Option<&Token> {
-		self.tokens.get(self.idx.get())
+		self.iter.as_slice().get(0)
 	}
 	pub fn peek2(&self) -> Option<&Token> {
-		self.tokens.get(1 + self.idx.get())
+		self.iter.as_slice().get(1)
 	}
-	pub fn next(&self) -> Option<&Token> {
-		let idx = self.idx.get();
-		if let Some(t) = self.tokens.get(idx) {
-			self.idx.set(idx + 1);
-			Some(t)
-		} else {
-			None
-		}
+	pub fn next(&mut self) -> Option<Token> {
+		self.iter.next()
 	}
 }
 
