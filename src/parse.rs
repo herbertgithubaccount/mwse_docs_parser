@@ -1,7 +1,7 @@
 
 use log::{debug, log_enabled, trace};
 
-use crate::lex::{Kw, Lit, Punc, Token, TokenIter};
+use crate::{lex::{Kw, Lit, Punc, Token, TokenIter}, package::{ClassPackage, EPkg, EventDatum, EventLink, EventPackage, Example, FnArg, FunctionPackage, LibPackage, MethodPackage, Overload, PackageOperator, PkgCore, ValuePackage}};
 use derive_more::Debug;
 
 
@@ -58,12 +58,7 @@ fn munch_if_possible(iter: &mut TokenIter, punc: Punc) -> bool {
 pub trait FromTokens: Sized {
 	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr>;
 }
-#[derive(Debug, Clone)]
-pub struct Example {
-	pub path: Box<str>,
-	pub title: Option<Box<str>>,
-	pub description: Option<Box<str>>,
-}
+
 
 /// Creates an example from the tokens. Consumes the path as well.
 impl FromTokens for Example {
@@ -148,16 +143,6 @@ impl FromTokens for Vec<Example> {
 }
 
 
-/// Stores something like
-/// ```lua
-/// { rightType = "niColor", resultType = "niColor", description = "Adds the color channel values of two `niColor` objects." },
-/// ```
-#[derive(Debug)]
-pub struct Overload {
-	pub right_ty: Option<Box<str>>,
-	pub result_ty: Option<Box<str>>,
-	pub description: Option<Box<str>>,
-}
 
 
 impl FromTokens for Overload {
@@ -222,10 +207,6 @@ impl FromTokens for Overload {
 	}
 }
 
-#[derive(Debug)]
-pub struct PackageOperator {
-	overloads: Vec<Overload>
-}
 
 impl FromTokens for Vec<Overload> {
 	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
@@ -252,34 +233,12 @@ impl FromTokens for Vec<Overload> {
 	}
 }
 
-#[derive(Debug, Clone)]
-pub struct ClassPackage {
-	/// The type from which this type inherits should be passed here. This will allow the documentation builders to build the proper inheritance chains. For example, when a function accepts tes3mobileActor, because tes3mobileNPC, tes3mobileCreature, and tes3mobilePlayer have inherits = "tes3mobileActor", the docs will be built with tes3mobileNPC, tes3mobileCreature, and tes3mobilePlayer parameters for that function automatically. This saves you the job of figuring out the complete inheritance chains.
-	pub inherits: Option<Box<str>>,
-	///This is a flag for types that can't be accessed normally. There are some types which inherit from abstract ones.
-	pub is_abstract: bool,
-}
 
 
-#[derive(Debug)]
-pub struct ValuePackage{
-	pub read_only: bool,
-	pub valuetype: Option<Box<str>>,
-	pub default: Option<Lit>,
-
-}
 
 
-/// Stores an argument / return value of a function.
-#[derive(Debug)]
-pub struct FnArg {
-	pub name: Option<Box<str>>,
-	pub ty: Option<Box<str>>,
-	pub optional: bool,
-	pub description: Option<Box<str>>,
-	pub default: Option<Lit>,
-	pub table_params: Option<Vec<FnArg>>,
-}
+
+
 
 
 impl FromTokens for FnArg {
@@ -450,30 +409,7 @@ impl FromTokens for Vec<FnArg> {
 }
 
 
-#[derive(Debug)]
-pub struct FunctionPackage {
-	pub args: Vec<FnArg>,
-	pub rets: Vec<FnArg>,
-}
 
-#[derive(Debug)]
-pub struct LibPackage {
-	pub link: Option<Box<str>>,
-	///For libraries with sub-namespaces such as mwse.mcm, etc., this array contians the nested namespaces.
-	pub sublibs: Option<Vec<LibPackage>>,
-	// pub rets: Vec<FnArg>,
-}
-
-#[derive(Debug)]
-pub struct EventDatum {
-	pub name: Box<str>,
-	pub ty: Option<Box<str>>,
-	pub read_only: bool,
-	pub optional: bool,
-	pub description: Option<Box<str>>,
-	// should be an owned literal
-	pub default: Option<Lit>,
-}
 
 impl FromTokens for EventDatum {
 	/// Parses stuff like
@@ -594,12 +530,6 @@ impl FromTokens for Vec<EventDatum> {
 	}
 }
 
-#[derive(Debug)]
-pub struct EventLink {
-	pub name: Box<str>,
-	pub path: Box<str>,
-}
-
 impl FromTokens for EventLink {
 	/// parses something like 
 	/// ```lua
@@ -660,60 +590,6 @@ impl FromTokens for Vec<EventLink> {
 	}
 
 }
-#[derive(Debug)]
-pub struct EventPackage {
-	pub filter: Option<Box<str>>,
-	pub blockable: bool,
-	pub event_data: Vec<EventDatum>,
-	pub links: Vec<EventLink>,
-	pub related: Vec<Box<str>>,
-
-	
-	// pub rets: Vec<FnArg>,
-}
-
-
-
-
-
-
-
-#[derive(Debug)]
-pub enum PackageType {
-	Class(ClassPackage),
-	Function(FunctionPackage),
-	Method(FunctionPackage),
-	Value(ValuePackage),
-	Lib(LibPackage),
-	Event(EventPackage),
-	Operator(PackageOperator)
-}
-
-
-
-#[derive(Debug)]
-pub struct Package {
-	/// Name of the package.
-	// pub name: &str,
-	/// Description of the package.
-	pub description: Option<Box<str>>,
-	/// The type of package, along with information specific to that package.
-	pub ty: PackageType,
-	/// Is this part of the experimental API? Default: `false`.
-	pub experimental: bool,
-
-	// pub key string The name of the file that generated this package.
-	// pub type packageType The type definition for the package.
-	// pub folder string The folder that the package was created from.
-	// pub parent package The package this package is a child of.
-	// pub namespace string The full namespace of the package.
-
-	/// Allows marking definitions as deprecated. Those definitions aren't written to the web documentation.
-	pub deprecated: bool,
-
-	///A table containing the examples. Keys are the example's name/path to the example file.
-	pub examples:  Option<Vec<Example>>,
-}
 
 
 
@@ -730,17 +606,15 @@ pub struct Package {
 // 	let mut description = None;
 // }
 
-impl FromTokens for Package {
+impl FromTokens for EPkg {
 	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
+
+		let mut core = PkgCore::default();
 			
 		// The value type string. Used to make sure we parsed the file correctly.
 		let mut file_type_str: Option<Box<str>> = None;
 
 
-		let mut description = None;
-		let mut experimental = false;
-		let mut deprecated  = false;
-		let mut examples:  Option<Vec<Example>> = None;
 		
 		// value specific
 		let mut valuetype = None;
@@ -802,8 +676,7 @@ impl FromTokens for Package {
 						},
 						
 						Kw::Examples => {
-							examples = Some(Vec::<Example>::from_tokens(iter)?);
-							debug!("got examples: {examples:?}");
+							core.examples = Some(Vec::<Example>::from_tokens(iter)?);
 						},
 						Kw::EventData => {
 							event_data = Vec::<EventDatum>::from_tokens(iter)?;
@@ -818,7 +691,7 @@ impl FromTokens for Package {
 						}
 						Kw::Description => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => description = Some(s),
+								Some(Token::Lit(Lit::Str(s))) => core.description = Some(s),
 								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Description)
 							}
 						},
@@ -861,14 +734,14 @@ impl FromTokens for Package {
 
 						Kw::Deprecated => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => deprecated = b,
+								Some(Token::Lit(Lit::Bool(b))) => core.deprecated = b,
 								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Deprecated)
 							}
 						},
 						
 						Kw::Experimental => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => experimental = b,
+								Some(Token::Lit(Lit::Bool(b))) => core.experimental = b,
 								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Experimental)
 							}
 						},
@@ -963,18 +836,16 @@ impl FromTokens for Package {
 		}
 		debug!("returning packagetype {file_type_str}");
 		// TODO: trigger error if value does not match parsed parameters
-		let ty = match file_type_str.as_ref() {
-			"class" => PackageType::Class(ClassPackage{is_abstract, inherits}),
-			"function" => PackageType::Function(FunctionPackage{args: fn_args, rets: fn_rets}),
-			"method" => PackageType::Method(FunctionPackage{args: fn_args, rets: fn_rets}),
-			"value" => PackageType::Value(ValuePackage{read_only, valuetype, default}),
-			"lib" => PackageType::Lib(LibPackage{link, sublibs: None}),
-			"event" => PackageType::Event(EventPackage{filter, blockable, event_data, links, related}),
-			"operator" => PackageType::Operator(PackageOperator{overloads}),
+		match file_type_str.as_ref() {
+			"class" => Ok(EPkg::Class(ClassPackage{core, is_abstract, inherits, ..Default::default()})),
+			"function" => Ok(EPkg::Function(FunctionPackage{core, args: fn_args, rets: fn_rets})),
+			"method" => Ok(EPkg::Method(MethodPackage{core, args: fn_args, rets: fn_rets})),
+			"value" => Ok(EPkg::Value(ValuePackage{core, read_only, valuetype, default})),
+			"lib" => Ok(EPkg::Lib(LibPackage{core, link, sublibs: None})),
+			"event" => Ok(EPkg::Event(EventPackage{core, filter, blockable, event_data, links, related})),
+			"operator" => Ok(EPkg::Operator(PackageOperator{core, overloads})),
 			_ => do yeet ParseErr::BadPkgTy(file_type_str)
 			// _ => do yeet ParseErr{token}
-		};
-
-		Ok(Package { description, deprecated, experimental, examples, ty })
+		}
 	}
 }
