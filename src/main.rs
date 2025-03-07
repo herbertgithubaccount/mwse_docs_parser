@@ -59,7 +59,7 @@ fn process_str(contents: String, path: &Path) -> Result<bool, BoxErr> {
 
 fn process(dir: PathBuf) -> Pin<Box<dyn Future<Output = Result<usize, BoxErr>>>>  {
 	Box::pin(async move {
-
+	trace!("processing {dir:?}");
 	let mut stream = tokio::fs::read_dir(dir).await?;
 	let mut num_read = 0;
 	while let Some(entry) = stream.next_entry().await? {
@@ -112,13 +112,30 @@ async fn main() -> Result<(), BoxErr> {
 	// return Ok(());
 
 
-	match process(PathBuf::from("docs/namedTypes")).await {
-		Ok(num) => println!("proccessed {num} files!"),
-		Err(e) => {
-			error!("{e}");
+	use std::time::Instant;
+    let now = Instant::now();
+
+    // Code block to measure.
+	let mut total = 0_usize;
+    {
+		match process(PathBuf::from("docs/namedTypes")).await {
+			Ok(num) => total += num,
+			Err(e) => panic!("{e}"),
+		}
+		match process(PathBuf::from("docs/global")).await {
+			Ok(num) => total += num,
+			Err(e) => panic!("{e}"),
+		}
+		
+		match process(PathBuf::from("docs/events")).await {
+			Ok(num) => total += num,
+			Err(e) => panic!("{e}"),
 		}
 	}
+	let elapsed = now.elapsed();
 	
+	println!("processed {total} files");
+    println!("Time elapsed: {:.2?}", elapsed);
 	// let tokens = lex::get_tokens(input);
 
 	// if let Ok(tokens) = tokens {

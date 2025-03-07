@@ -15,7 +15,8 @@ pub enum Lit<'a> {
 	#[debug("{_0}")]
 	Num(f64),
 	#[debug("{_0}")]
-	Bool(bool)
+	Bool(bool),
+	Nil
 }
 
 // impl std::fmt::Display for Lit<'_> {
@@ -48,6 +49,8 @@ pub enum Kw {
 	
 	Default, 		// len = 7
 	Returns, 		// len = 7
+	/// Used in event documentation
+	Related,		// len = 7
 	
 	Inherits, 		// len = 8
 	Examples,		// len = 8
@@ -103,6 +106,7 @@ impl Kw {
 			7 => match ident {
 				"default" => Some(Self::Default),
 				"returns" => Some(Self::Returns),
+				"related" => Some(Self::Related),
 				_ => None,
 			},
 			8 => match ident {
@@ -110,6 +114,7 @@ impl Kw {
 				"examples" => Some(Self::Examples),
 				"optional" => Some(Self::Optional),
 				"readOnly" => Some(Self::ReadOnly),
+				"readonly" => Some(Self::ReadOnly),
 				_ => None,
 			},
 			9 => match ident {
@@ -132,6 +137,7 @@ impl Kw {
 			11 => match ident {
 				"description" => Some(Self::Description),
 				"tableParams" => Some(Self::TableParams),
+				"tableparams" => Some(Self::TableParams),
 				_ => None,
 			},
 			12 => match ident {
@@ -214,6 +220,9 @@ pub enum LexError {
 	/// We cannot process a token because we have already reached the end of the input.
 	#[default]
 	EndOfInput,
+
+	UnexpectedEOI,
+	InvalidNum(Box<str>),
 }
 
 impl std::fmt::Display for LexError {
@@ -248,25 +257,43 @@ fn next_char_is_not(iter: &mut Iter, target: char) -> bool {
 }
 
 #[inline(always)]
-fn parse_num<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize) -> Lit<'a> {
+fn parse_num<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize) -> Result<Lit<'a>, LexError> {
 	let mut end= start;
-	while let Some((i, '0'..='9')) = iter.peek() {
-		end = *i;
-		iter.next();
-	}
-	if next_char_is(iter,'.') {
-		end = iter.next().unwrap().0;
-		while let Some((i, '0'..='9')) = iter.peek() {
-			end = *i;
-			iter.next();
+	let end = loop {
+		match iter.peek() {
+			Some((_, '0'..='9'|'-'|'+'|'e')) => {iter.next();}, 
+			// won't e
+			Some((i, _)) => break *i,
+			None => do yeet LexError::UnexpectedEOI,
 		}
-
-		let f = input[start..=end].parse().unwrap();
-		Lit::Num(f)
-	} else {
-		let n = input[start..=end].parse().unwrap();
-		Lit::Int(n)
+	};
+	match input[start..end].parse() {
+		Ok(f) => Ok(Lit::Num(f)),
+		Err(_) => do yeet LexError::InvalidNum(Box::from(&input[start..end]))
 	}
+	// let f = input[start..=end].parse()
+	// loop {
+	// 	match iter.peek() {
+	// 		Some((i, 'e'))
+	// 	}
+	// }
+	// while let Some((i, 'e'|'0'..='9')) = iter.peek() {
+	// 	end = *i;
+	// 	iter.next();
+	// }
+	// if next_char_is(iter,'.') {
+	// 	end = iter.next().unwrap().0;
+	// 	while let Some((i, 'e'|'0'..='9')) = iter.peek() {
+	// 		end = *i;
+	// 		iter.next();
+	// 	}
+
+	// 	let f = input[start..=end].parse().unwrap();
+	// 	Lit::Num(f)
+	// } else {
+	// 	let n = input[start..=end].parse().unwrap();
+	// 	Lit::Int(n)
+	// }
 }
 
 /// Gets the start of the input, after skipping over comments and whitespace.
@@ -351,15 +378,15 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 		
 		// numbers
 		'0'..='9' => {
-			Ok(Token::Lit(parse_num(input, iter, start)))
+			Ok(Token::Lit(parse_num(input, iter, start)?))
 		},
 		// negative numbers
 		'-' if let Some('0'..='9') = peek_char(iter) => {
 			let start = iter.next().unwrap().0;
 
 			match parse_num(input, iter, start) {
-				Lit::Int(n) => Ok(Token::Lit(Lit::Int(-n))),
-				Lit::Num(f) => Ok(Token::Lit(Lit::Num(-f))),
+				Ok(Lit::Int(n)) => Ok(Token::Lit(Lit::Int(-n))),
+				Ok(Lit::Num(f)) => Ok(Token::Lit(Lit::Num(-f))),
 				_ => unreachable!("This should never happen")
 			}
 		},
@@ -385,10 +412,12 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 			
 			let ident = &input[start..end];
 
-			// check if it's a boolean
+			// check if it's a boolean or `nil`
 			if let Ok(b) = ident.parse() {
 				return Ok(Token::Lit(Lit::Bool(b)));
-			} 
+			} else if ident == "nil" {
+				return Ok(Token::Lit(Lit::Nil))
+			}
 
 			// otherwise, it's either a special identifier or a regular identifer
 			match Kw::try_from_str(ident) {
