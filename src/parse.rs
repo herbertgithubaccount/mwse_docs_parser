@@ -173,7 +173,10 @@ impl<'a> FromTokens<'a> for Vec<Example<'a>> {
 		Ok(examples)
 	}
 }
+#[derive(Debug)]
+pub struct PackageOperator {
 
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ClassPackage<'a> {

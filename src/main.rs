@@ -13,7 +13,7 @@ type BoxErr = Box<dyn std::error::Error>;
 mod parse;
 use std::{path::{Path, PathBuf}, pin::Pin};
 
-use log::{debug, error, trace, warn};
+use log::{debug, error, info, trace, warn};
 pub use parse::*;
 
 // struct DirPackage
@@ -69,16 +69,24 @@ fn process(dir: PathBuf) -> Pin<Box<dyn Future<Output = Result<usize, BoxErr>>>>
 		if ft.is_file() {
 			let path = entry.path();
 			let contents = tokio::fs::read_to_string(&path).await?;
-			if process_str(contents, &path)? {
-				num_read += 1;
+			match process_str(contents, &path) {
+				Ok(b) => if b { num_read += 1},
+				Err(e) => {
+					// info!("parsed {num_read} files without error.... :(");
+					do yeet e;
+				}
 			}
-			
-
 		} else if ft.is_dir() {
-			num_read += process(entry.path()).await?;
+			match process(entry.path()).await {
+				Ok(num) => num_read += num,
+				Err(e) => {
+					info!("parsed {num_read} files without error.... :(");
+					do yeet e;
+				}
+			}
 		}
 	}
-	println!("read {num_read} files");
+	// println!("read {num_read} files");
 	return Ok(num_read);
 })
 }

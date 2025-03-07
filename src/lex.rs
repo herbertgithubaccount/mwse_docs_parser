@@ -43,7 +43,7 @@ pub enum Kw {
 	Class, 			// len = 5
 	Title,			// len = 5
 	Links,			// len = 5,
-	
+
 	Filter,			// len = 6
 	
 	Default, 		// len = 7
@@ -56,12 +56,18 @@ pub enum Kw {
 	
 	Arguments, 		// len = 9
 	Blockable,		// len = 9
+	Overloads,		// len = 9
 	EventData,		// len = 9
 	ValueType, 		// len = 9
+	/// Used in operator overloads
+	RightType,		// len = 9
 	
 	Deprecated,		// len = 10
 	IsAbstract, 	// len = 10
 	ReturnType, 	// len = 10
+
+	/// Used in operator overloads
+	ResultType,		// len = 10
 
 	Description, 	// len = 11
 	TableParams, 	// len = 11
@@ -110,14 +116,17 @@ impl Kw {
 				"arguments" => Some(Self::Arguments),
 				"blockable" => Some(Self::Blockable),
 				"eventData" => Some(Self::EventData),
+				"overloads" => Some(Self::Overloads),
 				"valueType" => Some(Self::ValueType),
 				"valuetype" => Some(Self::ValueType),
+				"rightType" => Some(Self::RightType),
 				_ => None,
 			},
 			10 => match ident {
 				"deprecated" => Some(Self::Deprecated),
 				"isAbstract" => Some(Self::IsAbstract),
 				"returntype" => Some(Self::ReturnType),
+				"resultType" => Some(Self::ResultType),
 				_ => None,
 			},
 			11 => match ident {
