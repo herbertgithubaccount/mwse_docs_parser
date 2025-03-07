@@ -56,18 +56,19 @@ fn process_str(contents: String, path: &Path) -> Result<bool, BoxErr> {
 	}
 }
 
-fn process(dir: PathBuf) -> Pin<Box<dyn Future<Output = Result<usize, BoxErr>>>>  {
-	Box::pin(async move {
+fn process(dir: PathBuf) -> Result<usize, BoxErr>  {
+	// Box::pin(async move {
 	trace!("processing {dir:?}");
-	let mut stream = tokio::fs::read_dir(dir).await?;
+	let mut stream = std::fs::read_dir(dir)?;
 	let mut num_read = 0;
-	while let Some(entry) = stream.next_entry().await? {
+	while let Some(entry) = stream.next() {
+		let entry = entry?;
 		// dbg!(entry);
 		// if entry.
-		let ft = entry.file_type().await?;
+		let ft = entry.file_type()?;
 		if ft.is_file() {
 			let path = entry.path();
-			let contents = tokio::fs::read_to_string(&path).await?;
+			let contents = std::fs::read_to_string(&path)?;
 			match process_str(contents, &path) {
 				Ok(b) => if b { num_read += 1},
 				Err(e) => {
@@ -76,7 +77,7 @@ fn process(dir: PathBuf) -> Pin<Box<dyn Future<Output = Result<usize, BoxErr>>>>
 				}
 			}
 		} else if ft.is_dir() {
-			match process(entry.path()).await {
+			match process(entry.path()) {
 				Ok(num) => num_read += num,
 				Err(e) => {
 					info!("parsed {num_read} files without error.... :(");
@@ -87,11 +88,10 @@ fn process(dir: PathBuf) -> Pin<Box<dyn Future<Output = Result<usize, BoxErr>>>>
 	}
 	// println!("read {num_read} files");
 	return Ok(num_read);
-})
+// })
 }
 
-#[tokio::main]
-async fn main() -> Result<(), BoxErr> {
+fn main() -> Result<(), BoxErr> {
 	// use log;
 	env_logger::init();
 	// env_logger::builder().filter_level(log::LevelFilter::Debug)
@@ -117,16 +117,16 @@ async fn main() -> Result<(), BoxErr> {
     // Code block to measure.
 	let mut total = 0_usize;
     {
-		match process(PathBuf::from("docs/namedTypes")).await {
+		match process(PathBuf::from("docs/namedTypes")) {
 			Ok(num) => total += num,
 			Err(e) => panic!("{e}"),
 		}
-		match process(PathBuf::from("docs/global")).await {
+		match process(PathBuf::from("docs/global")) {
 			Ok(num) => total += num,
 			Err(e) => panic!("{e}"),
 		}
 		
-		match process(PathBuf::from("docs/events")).await {
+		match process(PathBuf::from("docs/events")) {
 			Ok(num) => total += num,
 			Err(e) => panic!("{e}"),
 		}
