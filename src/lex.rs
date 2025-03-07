@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::ops::FromResidual;
 use std::{iter::Peekable, str::CharIndices};
 
@@ -152,7 +153,7 @@ pub enum Punc {
 	RParen,
 	#[debug("=")]
 	Eq,
-	#[debug("returns")]
+	#[debug("return")]
 	Return,
 }
 // impl std::fmt::Display for Punc {
@@ -430,30 +431,62 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token<
 	}
 }
 
-pub fn get_tokens<'a>(input: &'a str) -> Result<Vec<Token<'a>>, LexError> {
-	let mut tokens = Vec::new();
-
-	debug!("lexing tokens of {input}");
-	let mut iter = input.char_indices().peekable();
-
-	loop {
-		let res = scan_token_internal(input, &mut iter);
-		match res {
-			Ok(t) => {
-				// println!("Parsed token {t:?}");
-				tokens.push(t)
-			},
-			Err(LexError::EndOfInput) => break,
-			Err(e) => return Err(e)
-		}
-	}
-	// do the conversion now instead of when each token is created
-	// because we probably only need to do this once
-	for t in &mut tokens {
-		if let Token::Ident("return") = t {
-			*t = Token::Punc(Punc::Return);
-			break
-		}
-	}
-	Ok(tokens)
+#[derive(Debug)]
+pub struct TokenIter<'a> {
+	tokens: Vec<Token<'a>>,
+	/// Index of next token.
+	idx: Cell<usize>,
 }
+
+impl<'a> TokenIter<'a> {
+
+	pub fn from_input(input: &'a str) -> Result<TokenIter<'a>, LexError> {
+		let mut tokens = Vec::new();
+
+		debug!("lexing tokens of {input}");
+		let mut iter = input.char_indices().peekable();
+
+		loop {
+			let res = scan_token_internal(input, &mut iter);
+			match res {
+				Ok(t) => {
+					// println!("Parsed token {t:?}");
+					tokens.push(t)
+				},
+				Err(LexError::EndOfInput) => break,
+				Err(e) => return Err(e)
+			}
+		}
+		// do the conversion now instead of when each token is created
+		// because we probably only need to do this once
+		for t in &mut tokens {
+			if let Token::Ident("return") = t {
+				*t = Token::Punc(Punc::Return);
+				break
+			}
+		}
+		Ok(Self::new(tokens))
+	}
+
+	pub fn new(tokens: Vec<Token<'a>>) -> Self {
+		Self {idx: Cell::new(0), tokens }
+	}
+
+	pub fn peek(&self) -> Option<&Token<'a>> {
+		self.tokens.get(self.idx.get())
+	}
+	pub fn peek2(&self) -> Option<&Token<'a>> {
+		self.tokens.get(1 + self.idx.get())
+	}
+	pub fn next(&self) -> Option<&Token<'a>> {
+		let idx = self.idx.get();
+		if let Some(t) = self.tokens.get(idx) {
+			self.idx.set(idx + 1);
+			Some(t)
+		} else {
+			None
+		}
+	}
+}
+
+

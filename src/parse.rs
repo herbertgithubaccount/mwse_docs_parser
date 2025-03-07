@@ -1,7 +1,7 @@
 
 use log::{debug, log_enabled, trace};
 
-use crate::lex::{Lit, Punc, Kw, Token};
+use crate::lex::{Kw, Lit, Punc, Token, TokenIter};
 use derive_more::Debug;
 
 use std::iter::Peekable;
@@ -60,6 +60,7 @@ pub enum ParseErr<'a>{
 macro_rules! expect_punc {
 	($iter:ident; $($punc:path),*) => {
 		$(
+			trace!("expecting punc {:?}", $punc);
 			match $iter.next() {
 				Some(Token::Punc($punc)) => (),
 				maybe_token => do yeet ParseErr::PuncExpected(maybe_token, $punc)
@@ -69,7 +70,7 @@ macro_rules! expect_punc {
 }
 
 /// Eats a punctuation if possible. Returns `true` if it got eaten
-fn munch_if_possible<'a>(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>, punc: Punc) -> bool {
+fn munch_if_possible<'a>(iter: &'a TokenIter<'a>, punc: Punc) -> bool {
 	if let Some(Token::Punc(p)) = iter.peek() && *p == punc {
 		iter.next();
 		true
@@ -82,7 +83,7 @@ fn munch_if_possible<'a>(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>
 
 
 pub trait FromTokens<'a>: Sized + 'a {
-	fn from_tokens(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) -> Result<Self, ParseErr<'a>>;
+	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>>;
 }
 #[derive(Debug, Clone, Copy)]
 pub struct Example<'a> {
@@ -94,7 +95,7 @@ pub struct Example<'a> {
 /// Creates an example from the tokens. Consumes the path as well.
 impl<'a> FromTokens<'a> for Example<'a> {
 
-	fn from_tokens(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
 		let path = match iter.next() {
 			Some(Token::Lit(Lit::Str(s))) => s,
 			Some(Token::Ident(id)) => *id,
@@ -149,7 +150,7 @@ impl<'a> FromTokens<'a> for Example<'a> {
 
 
 impl<'a> FromTokens<'a> for Vec<Example<'a>> {
-	fn from_tokens(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) -> Result<Vec<Example<'a>>, ParseErr<'a>> {
+	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Vec<Example<'a>>, ParseErr<'a>> {
 		
 		expect_punc!(iter; Punc::LBracket);
 		
@@ -204,7 +205,7 @@ pub struct FnArg<'a> {
 
 
 impl<'a> FromTokens<'a> for FnArg<'a> {
-	fn from_tokens(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
 		expect_punc!(iter; Punc::LBracket);
 
 		let mut name: Option<&str> = None;
@@ -314,45 +315,42 @@ impl<'a> FnArg<'a> {
 impl<'a> FromTokens<'a> for Vec<FnArg<'a>> {
 
 	/// Parses the list of function arguments, including the opening and closing braces
-	fn from_tokens(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) -> Result<Vec<FnArg<'a>>, ParseErr<'a>> {
+	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Vec<FnArg<'a>>, ParseErr<'a>> {
 		
-		// Allow specifying the name using a literal string
-		if let Some(Token::Lit(Lit::Str(ret_name))) = iter.peek() {
-			iter.next();
-			return Ok(vec![FnArg::from_name(Some(ret_name))]);
+
+		match iter.peek() {
+			// only case where we dont return early
+			Some(Token::Punc(Punc::LBracket)) => (),
+			// Allow specifying the name using a literal string
+			Some(Token::Lit(Lit::Str(ret_name))) => {
+				iter.next();
+				return Ok(vec![FnArg::from_name(Some(ret_name))]);
+			}
+			
+			t => do yeet ParseErr::PuncExpected(t, Punc::LBracket)
 		}
 
-		// Eat the first bracket
-		expect_punc!(iter; Punc::LBracket);
+		// Match the second character.
+		match iter.peek2() {
+			// Only situation in which we don't return early.
+			Some(Token::Punc(Punc::LBracket)) => (),
 
-
-		// Pick our path based on the first token
-		match iter.peek() {
-			// Expected path: do nothing and proceed with the rest of the function
-			Some(Token::Punc(Punc::LBracket)) => {},
-
-			// No arguments specified, return empty vector
+			// Empty list. So eat the two tokens and return.
 			Some(Token::Punc(Punc::RBracket)) => {
+				iter.next();
 				iter.next();
 				return Ok(vec![]);
 			},
-			
-			// Only one argument was specified, parse it normally.
-			Some(_) => {
-				return Ok(vec![FnArg::from_tokens(iter)?]);
-			},
-			None => do yeet ParseErr::UnspecifiedKeyword(None, Kw::Returns),
+			// Let `FnArg` consume the `{` token.
+			Some(_) => return Ok(vec![FnArg::from_tokens(iter)?]),
+			// TODO: make better error
+			None =>  do yeet ParseErr::PuncExpected(None, Punc::RBracket),
 		}
 
+		// At this point, we know there are two LBrackets in a row, so we can parse the array normally.
+		// Eat the first bracket
+		iter.next();
 
-		
-
-		// If there's no left bracket, then there's only a single argument.
-		if !matches!(iter.peek(), Some(Token::Punc(Punc::LBracket))) {
-			return Ok(vec![FnArg::from_tokens(iter)?]);
-		}
-		// eat the bracket
-		// iter.next();
 
 		let mut args = Vec::new();
 
@@ -360,12 +358,12 @@ impl<'a> FromTokens<'a> for Vec<FnArg<'a>> {
 		// While the next token is not a bracket
 		while !matches!(iter.peek(), Some(Token::Punc(Punc::RBracket))) {
 			args.push(FnArg::from_tokens(iter)?);
+
 			if log_enabled!(log::Level::Trace) {
 				trace!("added function arguments: {:?}", args.last())
 			}
-			if let Some(Token::Punc(Punc::Comma)) = iter.peek() {
-				iter.next();
-			}
+
+			munch_if_possible(iter, Punc::Comma);
 			
 		}
 		expect_punc!(iter; Punc::RBracket);
@@ -406,7 +404,7 @@ impl<'a> FromTokens<'a> for EventDatum<'a> {
 	///		description = "The actor attempting to trigger the event.",
 	///	},
 	/// ```
-	fn from_tokens(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
 		let name = match iter.next() {
 			Some(Token::Lit(Lit::Str(s))) => s,
 			Some(Token::Ident(id)) => *id,
@@ -452,7 +450,7 @@ impl<'a> FromTokens<'a> for EventDatum<'a> {
 						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Description),
 					};
 				},
-				Some(&t) => do yeet ParseErr::UnspecifiedKeyword(Some(t), Kw::EventData),
+				Some(t) => do yeet ParseErr::UnspecifiedKeyword(Some(t), Kw::EventData),
 				None => do yeet ParseErr::UnspecifiedKeyword(None, Kw::EventData),
 			}
 			munch_if_possible(iter, Punc::Comma);
@@ -479,7 +477,7 @@ impl<'a> FromTokens<'a> for Vec<EventDatum<'a>> {
 	///		},
 	/// }
 	/// ```
-	fn from_tokens(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
 		expect_punc!(iter; Punc::LBracket);
 		
 		let mut event_data = Vec::new();
@@ -515,7 +513,7 @@ impl<'a> FromTokens<'a> for EventLink<'a> {
 	///		["xActivate"] = "mwscript/functions/actor/xActivate",
 	///# }
 	/// ```
-	fn from_tokens(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
 		
 		
 		let name = match iter.next() {
@@ -549,7 +547,7 @@ impl<'a> FromTokens<'a> for Vec<EventLink<'a>> {
 	///		["xActivate"] = "mwscript/functions/actor/xActivate",
 	///	}
 	/// ```
-	fn from_tokens(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
 		expect_punc!(iter; Punc::LBracket);
 		
 		let mut links = Vec::new();
@@ -630,14 +628,14 @@ pub struct Package<'a> {
 
 
 
-// fn parse_example<'a>(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>, path: &'a str) -> Result<Example<'a>, ParseErr<'a>> {
+// fn parse_example<'a>(iter: &'a TokenIter<'a>, path: &'a str) -> Result<Example<'a>, ParseErr<'a>> {
 // 	expect_punc!(iter; Punc::LBracket);
 // 	let mut title = None;
 // 	let mut description = None;
 // }
 
 impl<'a> FromTokens<'a> for Package<'a> {
-	fn from_tokens(iter: &mut Peekable<impl Iterator<Item = &'a Token<'a>>>) -> Result<Self, ParseErr<'a>> {
+	fn from_tokens(iter: &'a TokenIter<'a>) -> Result<Self, ParseErr<'a>> {
 			
 		// The value type string. Used to make sure we parsed the file correctly.
 		let mut file_type_str: Option<&'a str> = None;

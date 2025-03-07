@@ -26,7 +26,7 @@ pub struct DirTokens {
 }
 
 fn process_str(contents: String, path: &Path) -> Result<bool, BoxErr> {
-	let tokens = match lex::get_tokens(&contents) {
+	let tokens = match lex::TokenIter::from_input(&contents) {
 		Ok(t) => t,
 		Err(e) => {
 			let path = path;
@@ -35,8 +35,9 @@ fn process_str(contents: String, path: &Path) -> Result<bool, BoxErr> {
 		}
 	};
 	debug!("Got tokens {tokens:?}");
-	let mut iter = tokens.iter().peekable();
-	match Package::from_tokens(&mut iter) {
+	// let mut iter = tokens.iter().peekable();
+	let iter = tokens;
+	match Package::from_tokens(&iter) {
 		Err(ParseErr::BadPkgTy(ty)) => {
 			warn!("Got a package with an invalid type!\n\t\
 				path: {path:?}\n\t\
