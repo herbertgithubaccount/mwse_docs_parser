@@ -11,13 +11,12 @@
 #![feature(str_as_str)]
 
 mod lex;
-type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 
 mod parse;
 mod writer;
 pub mod package;
 pub mod error;
-use std::{path::{Path, PathBuf}, pin::Pin};
+use std::{collections::HashMap, path::{Path, PathBuf}, pin::Pin};
 
 use derive_more::{Display, From};
 use error::Error;
@@ -27,14 +26,6 @@ use package::{ClassPkg, EPkg, EventPkg, FunctionPkg, LibPkg, MethodPkg, Operator
 pub use parse::*;
 use writer::Writable;
 
-
-#[derive(Debug, From)]
-enum MainError {
-	Io(std::io::Error),
-	Lex(LexError),
-	Parse(ParseErr),
-	Msg(String),
-}
 
 // struct DirPackage
 
@@ -66,18 +57,6 @@ impl DirPackages {
 			EPkg::Event(pkg) => self.events.push(pkg),
 			EPkg::Operator(pkg) => self.operators.push(pkg),
 		}
-		// unsafe {
-		// 	// let ptr = self as *mut _;
-		// 	// ptr.write_bytes(val, count);
-		// 	// ptr.write(val);
-		// 	let vec = &mut self.classes;
-		// 	if vec.capacity() == vec.len() {
-		// 		vec.reserve(1);
-		// 	}
-		// 	std::mem::cop
-		// 	vec.len
-
-		// }
 	}
 	fn extend(&mut self, other: DirPackages) {
 		self.classes.extend(other.classes);
@@ -100,52 +79,9 @@ impl DirPackages {
 	}
 }
 
-#[derive(Debug)]
-enum ProcessedEntry {
-	File(EPkg),
-	Dir(DirPackages),
-	Nothing,
-}
+
 
 fn process(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<DirPackages, Error>>>> {
-	Box::pin(async move {
-		trace!("processing {dir:?}");
-		let mut stream = tokio::fs::read_dir(dir).await?;
-		let mut pkgs = DirPackages::default();
-
-		let mut handles = Vec::new();
-		
-		while let Some(entry) = stream.next_entry().await? {
-			handles.push(tokio::spawn(async move {
-				let ft = entry.file_type().await?;
-				if ft.is_file() {
-					let path = entry.path();
-
-					match EPkg::parse_from_file(&path).await {
-						Ok(epkg) => return Ok(ProcessedEntry::File(epkg)),
-						Err(Error::Lex(l)) => warn!("File {path:?} had could not be lexed: {l:?}"),
-						Err(e) => error!("Could not parse file {path:?}: {e:?}")
-					}
-				} else if ft.is_dir() {
-					return Ok(ProcessedEntry::Dir(process(entry.path()).await?));
-				}
-
-				Ok(ProcessedEntry::Nothing)
-			}));
-		}
-		for handle in handles {
-			match handle.await? {
-				Ok(ProcessedEntry::Dir(pkgs2)) => pkgs.extend(pkgs2),
-				Ok(ProcessedEntry::File(epkg)) => pkgs.add_pkg(epkg),
-				Ok(ProcessedEntry::Nothing) => (),
-				Err(e) => {error!("{e:?}"); return Err(e)},
-			}
-		}
-		return Ok(pkgs);
-	})
-}
-
-fn process2(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<DirPackages, Error>>>> {
 	Box::pin(async move {
 		trace!("processing {dir:?}");
 		let mut stream = tokio::fs::read_dir(dir).await?;
@@ -156,13 +92,18 @@ fn process2(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<Di
 		
 		while let Some(entry) = stream.next_entry().await? {
 			
-			// won't have to wait very long for this one
+			// Don't have to wait very long for this.
+			// And waiting for it allows us to split the futures up based on return type.
+			// This means less branching later on.
 			let ft = entry.file_type().await?;
 
-
-			if ft.is_file() {
+			if ft.is_dir() {
+				dir_handles.push(tokio::spawn(process(entry.path())));
+			} else if ft.is_file() {
 				file_handles.push(tokio::spawn(async move {
 					let path = entry.path();
+					// Only return a file if we were able to parse it.
+					// Log the errors instead of killing the whole program.
 					match EPkg::parse_from_file(&path).await {
 						Ok(epkg) => return Some(epkg),
 						Err(Error::Lex(l)) => warn!("File {path:?} had could not be lexed: {l:?}"),
@@ -170,10 +111,6 @@ fn process2(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<Di
 					}
 					None
 				}));
-				// pkgs.add_pkg(EPkg::parse_from_file(&entry.path()).await?);
-			} else if ft.is_dir() {
-				dir_handles.push(tokio::spawn(process(entry.path())));
-				// pkgs.extend(process(entry.path()).await?);
 			}
 		}
 		
@@ -199,109 +136,39 @@ pub struct DocPackages {
 impl DocPackages {
 	pub async fn new() -> Result<DocPackages, Error> {
 		
-		let types;
-		let globals;
-		let events;
 
 		// initialize the above variables using threads
-		{
+		let tys_h = tokio::spawn(process(PathBuf::from("docs/namedTypes")));
+		let globs_h = tokio::spawn(process(PathBuf::from("docs/global")));
+		let evs_h = tokio::spawn(process(PathBuf::from("docs/events")));
 
-			let types_handle = tokio::spawn(process2(PathBuf::from("docs/namedTypes")));
-			let globals_handle = tokio::spawn(process2(PathBuf::from("docs/global")));
-			let events_handle = tokio::spawn(process2(PathBuf::from("docs/events")));
-
-			// named_types.
-			match types_handle.await? {
-				Ok(num) => types = num,
-				Err(e) => panic!("{e:?}"),
-			}
-			match globals_handle.await? {
-				Ok(num) => globals = num,
-				Err(e) => panic!("{e:?}"),
-			}
-			
-			match events_handle.await? {
-				Ok(num) => events = num,
-				Err(e) => panic!("{e:?}"),
-			}
+		match (tys_h.await?, globs_h.await?, evs_h.await?) {
+			(Ok(types), Ok(globals), Ok(events)) => {
+				Ok(Self{types, globals, events})
+			},
+			e => panic!("{e:?}")
 		}
-
-		Ok(Self{ types, globals, events })
 	}
 }
 
 
-async fn oldmain() -> Result<(), Error> {
 
+#[inline(always)]
+async fn gather_files() -> Result<(), Error> {
 
-	// dbg!(size_of::<EPkg>());
-	// dbg!(size_of::<PkgCore>());
-	// return Ok(());
-	// env_logger::builder().filter_level(log::LevelFilter::Debug)
-	// let input = r#"abc = { hi "this is a literal string}"#;
-	// let input = include_str!("../docs/namedTypes/mwseMCMSlider/convertToLabelValue.lua");
-	// let input = include_str!("../docs/namedTypes/mwseMCMSetting.lua");
-	// let input = include_str!("../docs/namedTypes/mwseMCMSlider.lua");
-	// let input = include_str!("../docs/global/tes3/equip.lua");
-	// let input = include_str!("../docs/events/standard/activate.lua");
+	let pkgs = DocPackages::new().await?;
 
-	// println!("lexing {input}");
-
-	// let path = PathBuf::from("docs/namedTypes/tes3processManager/detectPresence.lua");
-	// let contents = tokio::fs::read_to_string(&path).await?;
-	// _= dbg!(process_str(contents, &path));
-
-	// let path = PathBuf::from("docs/namedTypes/mgeCameraConfig.lua");
-	// let mut read_dir = std::fs::read_dir("docs/namedTypes/mgeCameraConfig")?;
-	// let path = PathBuf::from("docs/globals/math.lua");
-	// let mut read_dir = std::fs::read_dir("docs/global/math")?;
-	// let path = PathBuf::from("docs/namedTypes/mwseLogger.lua");
-	// let mut read_dir = std::fs::read_dir("docs/namedTypes/mwseLogger")?;
-	let path = PathBuf::from("docs/namedTypes/tes3mobilePlayer.lua");
-	let mut read_dir = std::fs::read_dir("docs/namedTypes/tes3mobilePlayer")?;
-
-	let epkg = EPkg::parse_from_file(&path).await?;
-	debug!("got epkg: {epkg:?}");
-	let EPkg::Class(mut cls_pkg) = epkg else {panic!()};
-
-
-	let mut values = Vec::new();
-	let mut functions = Vec::new();
-	let mut methods = Vec::new();
-	
-	for path in read_dir {
-		if path.is_err() {
-			warn!("entry is error! entry: {:?}", path);
-		}
-		let entry = path?;
-		debug!("processing entry: {:?}", entry.path());
-		// let parent_name = Some(cls_pkg.core.name.clone());
-		match EPkg::parse_from_file(&entry.path()).await {
-			Ok(EPkg::Value(pkg)) => values.push(pkg),
-			Ok(EPkg::Function(pkg)) => functions.push(pkg),
-			Ok(EPkg::Method(pkg)) => methods.push(pkg),
-			t => warn!("got something unexpected: {t:?}"),
-			// _ => (),
-		}
+	let mut cls_map = HashMap::with_capacity(pkgs.types.classes.len());
+	for cls in &pkgs.types.classes {
+		cls_map.insert(cls.core.name.as_ref(), cls);
 	}
-	values.sort_by(|a, b| a.core.name.cmp(&b.core.name));
-	functions.sort_by(|a, b| a.core.name.cmp(&b.core.name));
-	methods.sort_by(|a, b| a.core.name.cmp(&b.core.name));
-
-	cls_pkg.values = values;
-	cls_pkg.functions = functions;
-	cls_pkg.methods = methods;
-
-	// info!("got {cls_pkg:?}");
-	// dbg!(&cls_pkg);
-
-	let mut writer = std::fs::File::create("output.md")?;
-	cls_pkg.write_mkdocs(&mut writer, None)?;
-	// return Ok(());
+	// for 
 
 
 	Ok(())
 }
+
+
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -310,26 +177,17 @@ async fn main() -> Result<(), Error> {
 
 
 	use std::time::Instant;
+
     let now = Instant::now();
 
     // Code block to measure.
 	let pkgs = DocPackages::new().await?;
+
+
+
 	let elapsed = now.elapsed();
 	let total = pkgs.events.total_len() + pkgs.types.total_len() + pkgs.globals.total_len();
 	println!("Processed {total} files in {elapsed:.2?}.");
-	// let tokens = lex::get_tokens(input);
-
-	// if let Ok(tokens) = tokens {
-	// 	println!("printing tokens!");
-	// 	for (i, t) in tokens.iter().enumerate() {
-	// 		println!("\t{i}) {t:?}")
-	// 	}
-	// 	let mut peekable = tokens.iter().peekable();
-	// 	dbg!(Package::from_tokens(&mut peekable));
-
-	// } else {
-	// 	println!("Got tokens = {tokens:?}");
-	// }
 
 
 	Ok(())

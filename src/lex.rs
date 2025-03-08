@@ -293,7 +293,7 @@ fn next_char_is_not(iter: &mut Iter, target: char) -> bool {
 fn parse_num<'a>(input: &'a str, iter: &mut Iter<'a>, start: usize) -> Result<Lit, LexError> {
 	let end = loop {
 		match iter.peek() {
-			Some((_, '0'..='9'|'-'|'+'|'e')) => {iter.next();}, 
+			Some((_, '0'..='9'|'-'|'+'|'e'|'x'|'X'|'A'..='E'|'b'|'.')) => {iter.next();}, 
 			// won't e
 			Some((i, _)) => break *i,
 			None => do yeet LexError::UnexpectedEOI,
