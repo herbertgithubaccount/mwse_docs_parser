@@ -10,6 +10,7 @@ use crate::{error::Error, lex::{self, Lit}, FromTokens, ParseErr};
 
 /// Core fields that are present in every package
 #[derive(Debug, Default)]
+#[repr(C)]
 pub struct PkgCore {
 	/// Name of the package.
 	/// This is set after parsing.
@@ -22,6 +23,12 @@ pub struct PkgCore {
 
 	/// Allows marking definitions as deprecated. Those definitions aren't written to the web documentation.
 	pub deprecated: bool,
+
+	/// Flag that determines whether a class is abstract.
+	/// This will be `false` unless this `PkgCore` belongs to a `ClassPkg`
+	/// This is stored here in order to minimize the size of `ClsPkg`
+	///This is a flag for types that can't be accessed normally. There are some types which inherit from abstract ones.
+	pub is_abstract: bool, 
 
 	///A table containing the examples. Keys are the example's name/path to the example file.
 	pub examples:  Option<Vec<Example>>,
@@ -44,61 +51,15 @@ pub struct Example {
 
 #[derive(Debug)]
 pub enum EPkg {
-	Class(ClassPackage),
-	Function(FunctionPackage),
-	Method(MethodPackage),
-	Value(ValuePackage),
+	Class(ClassPkg),
+	Function(FnPkg),
+	Method(MethodPkg),
+	Value(ValuePkg),
 	Lib(LibPackage),
 	Event(EventPackage),
 	Operator(PackageOperator)
 }
 
-
-impl EPkg {
-	pub fn core(&self) -> &PkgCore {
-		match self {
-			EPkg::Class(pkg) => &pkg.core,
-			EPkg::Function(pkg) => &pkg.core,
-			EPkg::Method(pkg) => &pkg.core,
-			EPkg::Value(pkg) => &pkg.core,
-			EPkg::Lib(pkg) => &pkg.core,
-			EPkg::Event(pkg) => &pkg.core,
-			EPkg::Operator(pkg) => &pkg.core,
-		}
-	}
-	pub fn core_mut(&mut self) -> &mut PkgCore {
-		match self {
-			EPkg::Class(pkg) => &mut pkg.core,
-			EPkg::Function(pkg) => &mut pkg.core,
-			EPkg::Method(pkg) => &mut pkg.core,
-			EPkg::Value(pkg) => &mut pkg.core,
-			EPkg::Lib(pkg) => &mut pkg.core,
-			EPkg::Event(pkg) => &mut pkg.core,
-			EPkg::Operator(pkg) => &mut pkg.core,
-		}
-	}
-
-	pub async fn parse_from_file(path: &Path, parent_name: Option<Box<str>>) -> Result<Self, Error> {
-		let input = tokio::fs::read_to_string(path).await?;
-		let mut iter = lex::TokenIter::from_input(&input)?;
-		let mut epkg = EPkg::from_tokens(&mut iter)?;
-
-		let core = epkg.core_mut();
-		core.parent = parent_name;
-		let mut filename = path.file_name()
-								 .expect("Invalid filename!")
-								 .to_str()
-								 .expect("Invalid filename!");
-		if filename.ends_with(".lua") {
-			filename = &filename[..filename.len()-4];
-		}
-		
-		core.name = Box::from(filename);
-
-		
-		Ok(epkg)
-	}
-}
 
 
 
@@ -118,7 +79,7 @@ pub struct FnArg {
 }
 
 #[derive(Debug)]
-pub struct FunctionPackage {
+pub struct FnPkg {
 	/// Stores information about the package, such as its name and description.
 	pub core: PkgCore,
 	pub args: Vec<FnArg>,
@@ -126,7 +87,7 @@ pub struct FunctionPackage {
 }
 
 #[derive(Debug)]
-pub struct MethodPackage {
+pub struct MethodPkg {
 	/// Stores information about the package, such as its name and description.
 	pub core: PkgCore,
 	pub args: Vec<FnArg>,
@@ -138,18 +99,16 @@ pub struct MethodPackage {
 // =============================================================================
 
 #[derive(Debug, Default)]
-pub struct ClassPackage {
+pub struct ClassPkg {
 	/// Stores information about the package, such as its name and description.
 	pub core: PkgCore,
 	/// The type from which this type inherits should be passed here. This will allow the documentation builders to build the proper inheritance chains. For example, when a function accepts tes3mobileActor, because tes3mobileNPC, tes3mobileCreature, and tes3mobilePlayer have inherits = "tes3mobileActor", the docs will be built with tes3mobileNPC, tes3mobileCreature, and tes3mobilePlayer parameters for that function automatically. This saves you the job of figuring out the complete inheritance chains.
 	pub inherits: Option<Box<str>>,
-	///This is a flag for types that can't be accessed normally. There are some types which inherit from abstract ones.
-	pub is_abstract: bool,
 	/// The value packages used by this class.
-	pub values: Vec<ValuePackage>,
+	pub values: Vec<ValuePkg>,
 
-	pub functions: Vec<FunctionPackage>,
-	pub methods: Vec<MethodPackage>,
+	pub functions: Vec<FnPkg>,
+	pub methods: Vec<MethodPkg>,
 }
 
 // =============================================================================
@@ -157,13 +116,16 @@ pub struct ClassPackage {
 // =============================================================================
 
 #[derive(Debug)]
-pub struct ValuePackage{
+#[repr(C)]
+pub struct ValuePkg{
 	/// Stores information about the package, such as its name and description.
 	pub core: PkgCore,
+	/// Is this read only?
 	pub read_only: bool,
-	pub valuetype: Option<Box<str>>,
+	/// The value type
+	pub ty: Option<Box<str>>,
+	/// The default value
 	pub default: Option<Lit>,
-
 }
 #[derive(Debug)]
 pub struct PackageOperator {

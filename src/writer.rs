@@ -1,6 +1,6 @@
 
 use std::fmt;
-use crate::package::{ClassPackage, FunctionPackage, MethodPackage, ValuePackage};
+use crate::package::{ClassPkg, EPkg, FnPkg, MethodPkg, ValuePkg};
 use std::io::Write;
 use std::io;
 
@@ -19,18 +19,30 @@ const LUA_COMMENT_HEADER: &'static [u8; 164] = br#"--[[
 
 pub trait Writable {
 	/// Write the mkdocs documentation
-	fn write_mkdocs(&self, w: &mut impl Write) -> io::Result<()>;
+	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()>;
 	/// Write the Emmy documentation
-	fn write_lua(&self, w: &mut impl Write) -> io::Result<()>;
+	fn write_lua(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()> {
+		todo!("Figure out the lua thing")
+	}
 
 }
 
 
+fn write_sep(parent: Option<&impl Writable>, items: &[impl Writable], w: &mut impl Write) -> io::Result<()> {
+	if let Some(val) = items.first() {
+		val.write_mkdocs(w, parent)?;
+		for val in &items[1..] {
+			w.write(b"***\n")?;
+			val.write_mkdocs(w, parent)?;
+		}
+	}
+	Ok(())
+}
 
 
 
-impl Writable for ClassPackage {
-	fn write_mkdocs(&self, w: &mut impl Write) -> io::Result<()> {
+impl Writable for ClassPkg {
+	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()> {
 		w.write(MKDOCS_COMMENT_HEADER)?;
 		let name = self.core.name.as_ref();
 		let name_lower = name.to_lowercase();
@@ -41,51 +53,28 @@ impl Writable for ClassPackage {
 		writeln!(w, "{name}")?;
 		writeln!(w, r#"<div class="search_terms" style="display: none">{name_lower}</div>"#)?;
 		writeln!(w, "\n{desc}\n")?;
+
 		writeln!(w, "## Properties")?;
-
-		if let Some(val) = self.values.first() {
-			val.write_mkdocs(w)?;
-			for val in &self.values[1..] {
-				w.write(b"***\n")?;
-				val.write_mkdocs(w)?;
-			}
-		}
-
+		write_sep(Some(self), self.values.as_slice(), w);
 		writeln!(w, "## Functions")?;
-		if let Some(func) = self.functions.first() {
-			func.write_mkdocs(w)?;
-			for val in &self.functions[1..] {
-				w.write(b"***\n")?;
-				val.write_mkdocs(w)?;
-			}
-		}
+		write_sep(Some(self), self.functions.as_slice(), w);
 		writeln!(w, "## Methods")?;
-		if let Some(func) = self.methods.first() {
-			func.write_mkdocs(w)?;
-			for val in &self.methods[1..] {
-				w.write(b"***\n")?;
-				val.write_mkdocs(w)?;
-			}
-		}
+		write_sep(Some(self), self.methods.as_slice(), w);
 
-		Ok(())
-	}
-	fn write_lua(&self, w: &mut impl Write) -> io::Result<()> {
-		
 		Ok(())
 	}
 }
 
 
-impl Writable for ValuePackage {
-	fn write_mkdocs(&self, w: &mut impl Write) -> io::Result<()> {
+impl Writable for ValuePkg {
+	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()> {
 		let name = self.core.name.as_ref();
 		let name_lower = name.to_lowercase();
 		let desc = match self.core.description.as_ref() {
 			Some(s) => s.as_ref(),
 			None => ""
 		};
-		let ty = match self.valuetype.as_ref() {
+		let ty = match self.ty.as_ref() {
 			Some(ty) => ty.as_ref(),
 			None => "any"
 		};
@@ -106,14 +95,11 @@ r#"
 		Ok(())
 	}
 
-	fn write_lua(&self, w: &mut impl Write) -> io::Result<()> {
-		todo!()
-	}
 }
 
 
-impl Writable for FunctionPackage {
-	fn write_mkdocs(&self, w: &mut impl Write) -> io::Result<()> {
+impl Writable for FnPkg {
+	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()> {
 		let name = self.core.name.as_ref();
 		let name_lower = name.to_lowercase();
 		let desc = match self.core.description.as_ref() {
@@ -146,13 +132,10 @@ r#"
 		Ok(())
 	}
 
-	fn write_lua(&self, w: &mut impl Write) -> io::Result<()> {
-		todo!()
-	}
 }
 
-impl Writable for MethodPackage {
-	fn write_mkdocs(&self, w: &mut impl Write) -> io::Result<()> {
+impl Writable for MethodPkg {
+	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()> {
 		let name = self.core.name.as_ref();
 		let name_lower = name.to_lowercase();
 		let desc = match self.core.description.as_ref() {
@@ -185,7 +168,4 @@ r#"
 		Ok(())
 	}
 
-	fn write_lua(&self, w: &mut impl Write) -> io::Result<()> {
-		todo!()
-	}
 }

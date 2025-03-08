@@ -1,7 +1,9 @@
 
+use std::path::Path;
+
 use log::{debug, log_enabled, trace};
 
-use crate::{lex::{Kw, Lit, Punc, Token, TokenIter}, package::{ClassPackage, EPkg, EventDatum, EventLink, EventPackage, Example, FnArg, FunctionPackage, LibPackage, MethodPackage, Overload, PackageOperator, PkgCore, ValuePackage}};
+use crate::{error::Error, lex::{self, Kw, Lit, Punc, Token, TokenIter}, package::{ClassPkg, EPkg, EventDatum, EventLink, EventPackage, Example, FnArg, FnPkg, LibPackage, MethodPkg, Overload, PackageOperator, PkgCore, ValuePkg}};
 use derive_more::Debug;
 
 
@@ -622,12 +624,11 @@ impl FromTokens for EPkg {
 
 
 		// function / method specific 
-		let mut fn_args = Vec::new();
-		let mut fn_rets = Vec::new();
+		let mut args = Vec::new();
+		let mut rets = Vec::new();
 
 
 		// class specific
-		let mut is_abstract = false;
 		let mut inherits = None;
 
 		// value specific
@@ -663,16 +664,16 @@ impl FromTokens for EPkg {
 					trace!("\tparsing {t:?} as keyword....");
 					match sp {
 						Kw::Arguments => {
-							fn_args = Vec::<FnArg>::from_tokens(iter)?;
-							trace!("\tparsed fn args = {fn_args:?}");
+							args = Vec::<FnArg>::from_tokens(iter)?;
+							trace!("\tparsed fn args = {args:?}");
 						},
 						Kw::Overloads => {
 							overloads = Vec::<Overload>::from_tokens(iter)?;
 							trace!("\tparsed fn args = {overloads:?}");
 						},
 						Kw::Returns => {
-							fn_rets = Vec::<FnArg>::from_tokens(iter)?;
-							trace!("\tparsed fn rets = {fn_args:?}");
+							rets = Vec::<FnArg>::from_tokens(iter)?;
+							trace!("\tparsed fn rets = {args:?}");
 						},
 						
 						Kw::Examples => {
@@ -721,7 +722,7 @@ impl FromTokens for EPkg {
 
 						Kw::IsAbstract => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => is_abstract = b,
+								Some(Token::Lit(Lit::Bool(b))) => core.is_abstract = b,
 								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::IsAbstract)
 							}
 						},
@@ -823,29 +824,78 @@ impl FromTokens for EPkg {
 
 		let file_type_str = file_type_str.expect("Error: no valuetype specified!");
 
-		// valuetype is sometimes used to specify function returns
-		// TODO: this clone does not need to happen
+		// Handle `value` here to avoid a clone later
+		if file_type_str.as_ref() == "value" {
+			return Ok(EPkg::Value(ValuePkg{core, read_only, ty: valuetype, default}));
+		}
 		if valuetype.is_some() {
-			if fn_rets.len() == 0 {
-				fn_rets = vec![FnArg::from_valuetype(valuetype.clone())];
+			if rets.len() == 0 {
+				rets = vec![FnArg::from_valuetype(valuetype)];
 			} else {
-				assert!(fn_rets.len() == 1, "Error: Cannot specify both valuetype and returns");
-				assert!(fn_rets[0].ty.is_none(), "Error: Cannot specify both valuetype and returns");
-				fn_rets[0].ty = valuetype.clone();
+				assert!(rets.len() == 1, "Error: Cannot specify both valuetype and returns");
+				assert!(rets[0].ty.is_none(), "Error: Cannot specify both valuetype and returns");
+				rets[0].ty = valuetype;
 			}
 		}
 		debug!("returning packagetype {file_type_str}");
 		// TODO: trigger error if value does not match parsed parameters
 		match file_type_str.as_ref() {
-			"class" => Ok(EPkg::Class(ClassPackage{core, is_abstract, inherits, ..Default::default()})),
-			"function" => Ok(EPkg::Function(FunctionPackage{core, args: fn_args, rets: fn_rets})),
-			"method" => Ok(EPkg::Method(MethodPackage{core, args: fn_args, rets: fn_rets})),
-			"value" => Ok(EPkg::Value(ValuePackage{core, read_only, valuetype, default})),
+			"class" => Ok(EPkg::Class(ClassPkg{core, inherits, ..Default::default()})),
+			"function" => Ok(EPkg::Function(FnPkg{core, args, rets})),
+			"method" => Ok(EPkg::Method(MethodPkg{core, args, rets})),
 			"lib" => Ok(EPkg::Lib(LibPackage{core, link, sublibs: None})),
 			"event" => Ok(EPkg::Event(EventPackage{core, filter, blockable, event_data, links, related})),
 			"operator" => Ok(EPkg::Operator(PackageOperator{core, overloads})),
 			_ => do yeet ParseErr::BadPkgTy(file_type_str)
 			// _ => do yeet ParseErr{token}
 		}
+	}
+}
+
+
+
+impl EPkg {
+	pub fn core(&self) -> &PkgCore {
+		match self {
+			EPkg::Class(pkg) => &pkg.core,
+			EPkg::Function(pkg) => &pkg.core,
+			EPkg::Method(pkg) => &pkg.core,
+			EPkg::Value(pkg) => &pkg.core,
+			EPkg::Lib(pkg) => &pkg.core,
+			EPkg::Event(pkg) => &pkg.core,
+			EPkg::Operator(pkg) => &pkg.core,
+		}
+	}
+	pub fn core_mut(&mut self) -> &mut PkgCore {
+		match self {
+			EPkg::Class(pkg) => &mut pkg.core,
+			EPkg::Function(pkg) => &mut pkg.core,
+			EPkg::Method(pkg) => &mut pkg.core,
+			EPkg::Value(pkg) => &mut pkg.core,
+			EPkg::Lib(pkg) => &mut pkg.core,
+			EPkg::Event(pkg) => &mut pkg.core,
+			EPkg::Operator(pkg) => &mut pkg.core,
+		}
+	}
+
+	pub async fn parse_from_file(path: &Path, parent_name: Option<Box<str>>) -> Result<Self, Error> {
+		let input = tokio::fs::read_to_string(path).await?;
+		let mut iter = TokenIter::from_input(&input)?;
+		let mut epkg = EPkg::from_tokens(&mut iter)?;
+
+		let core = epkg.core_mut();
+		core.parent = parent_name;
+		let mut filename = path.file_name()
+								 .expect("Invalid filename!")
+								 .to_str()
+								 .expect("Invalid filename!");
+		if filename.ends_with(".lua") {
+			filename = &filename[..filename.len()-4];
+		}
+
+		core.name = Box::from(filename);
+
+		
+		Ok(epkg)
 	}
 }

@@ -20,7 +20,7 @@ use derive_more::{Display, From};
 use error::Error;
 use lex::LexError;
 use log::{debug, error, info, trace, warn};
-use package::EPkg;
+use package::{ClassPkg, EPkg, LibPackage};
 pub use parse::*;
 use writer::Writable;
 
@@ -164,7 +164,7 @@ async fn main() -> Result<(), Error> {
 	info!("got {cls_pkg:?}");
 
 	let mut writer = std::fs::File::create("output.md")?;
-	cls_pkg.write_mkdocs(&mut writer)?;
+	cls_pkg.write_mkdocs(&mut writer, None::<&ClassPkg>)?;
 	return Ok(());
 
 
