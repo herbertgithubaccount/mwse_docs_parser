@@ -609,12 +609,24 @@ impl FromTokens for Vec<EventLink> {
 // 	let mut description = None;
 // }
 
-impl FromTokens for EPkg {
-	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
+
+
+
+impl EPkg {
+
+
+	fn from_tokens(iter: &mut TokenIter, path: &Path) -> Result<Self, ParseErr> {
 
 			
 		// Core values
-		let mut core = PkgCore::default();
+		let mut core = PkgCore{
+			path: Box::from(path),
+			name: Box::from(path.file_name().unwrap().to_str().unwrap().trim_end_matches(".lua")),
+			description: None,
+			experimental: false,
+			examples: None,
+			deprecated: false,
+		};
 
 
 		// The value type string. Used to make sure we parsed the file correctly.
@@ -845,71 +857,23 @@ impl FromTokens for EPkg {
 		debug!("returning packagetype {file_type_str}");
 		// TODO: trigger error if value does not match parsed parameters
 		match file_type_str.as_ref() {
-			"class" => Ok(EPkg::Class(ClassPkg{core, inherits, is_abstract, ..Default::default()})),
+			"class" => Ok(EPkg::Class(ClassPkg::new(core, is_abstract, inherits))),
 			"function" => Ok(EPkg::Function(FunctionPkg{core, args, rets})),
 			"method" => Ok(EPkg::Method(MethodPkg{core, args, rets})),
-			"lib" => Ok(EPkg::Lib(LibPkg{core, link, ..Default::default()})),
+			"lib" => Ok(EPkg::Lib(LibPkg::new(core, link))),
 			"event" => Ok(EPkg::Event(EventPkg{core, filter, blockable, event_data, links, related})),
 			"operator" => Ok(EPkg::Operator(OperatorPkg{core, overloads})),
 			_ => do yeet ParseErr::BadPkgTy(file_type_str)
 			// _ => do yeet ParseErr{token}
 		}
 	}
-}
-
-
-
-impl EPkg {
-	// pub fn core(&self) -> &PkgCore {
-	// 	match self {
-	// 		EPkg::Class(pkg) => &pkg.core,
-	// 		EPkg::Function(pkg) => &pkg.core,
-	// 		EPkg::Method(pkg) => &pkg.core,
-	// 		EPkg::Value(pkg) => &pkg.core,
-	// 		EPkg::Lib(pkg) => &pkg.core,
-	// 		EPkg::Event(pkg) => &pkg.core,
-	// 		EPkg::Operator(pkg) => &pkg.core,
-	// 	}
-	// }
-	// pub fn core_mut(&mut self) -> &mut PkgCore {
-	// 	match self {
-	// 		EPkg::Class(pkg) => &mut pkg.core,
-	// 		EPkg::Function(pkg) => &mut pkg.core,
-	// 		EPkg::Method(pkg) => &mut pkg.core,
-	// 		EPkg::Value(pkg) => &mut pkg.core,
-	// 		EPkg::Lib(pkg) => &mut pkg.core,
-	// 		EPkg::Event(pkg) => &mut pkg.core,
-	// 		EPkg::Operator(pkg) => &mut pkg.core,
-	// 	}
-	// }
 
 	pub async fn parse_from_file(path: &Path) -> Result<Self, Error> {
 		let input = tokio::fs::read_to_string(path).await?;
 		let mut iter = TokenIter::from_input(&input)?;
-		let mut epkg = EPkg::from_tokens(&mut iter)?;
 
-		// let core = epkg.core_mut();
-		// core.parent = parent_name;
-		let mut filename = path.file_name().unwrap().to_str().unwrap();
+		EPkg::from_tokens(&mut iter, path)
+			.map_err(Error::Parse)
 
-		let parts: Vec<&str> = path.components()
-			.map(|c| c.as_os_str().to_str().unwrap())
-			.collect();
-
-		let namespace = if parts.len() >= 3 {
-			parts[2..parts.len() - 1].join(".").into_boxed_str()
-		} else {
-			Box::from("")
-		};
-
-		if filename.ends_with(".lua") {
-			filename = &filename[..filename.len()-4];
-		}
-		let core = epkg.core_mut();
-		core.namespace = namespace;
-		core.name = Box::from(filename);
-
-		
-		Ok(epkg)
 	}
 }

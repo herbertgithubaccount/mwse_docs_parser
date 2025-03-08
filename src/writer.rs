@@ -1,7 +1,8 @@
 
-use std::fmt;
-use crate::package::{ClassPkg, EPkg, FnArg, FunctionPkg, MethodPkg, PkgCore, ValuePkg};
-use crate::FromTokens;
+use std::collections::HashMap;
+use log::debug;
+
+use crate::package::{ClassPkg, FnArg, FunctionPkg, LibPkg, MethodPkg, PkgCore, ValuePkg};
 use std::io::Write;
 use std::io;
 
@@ -73,14 +74,14 @@ macro_rules! trimmed_cls_name {
 /// Writes a list of seperated things.
 /// Used to write functions and fields
 macro_rules! write_separated {
-	($parent:ident, $items:expr, $w:ident, $header:literal) => {
+	($parent:ident, $items:expr, $w:expr, $header:literal) => {
 		{
 			let parent = Some(&$parent.core);
 			if $items.len() > 0  {
-				$w.write($header)?;
+				write!($w, $header)?;
 				for val in $items {
 					val.write_mkdocs($w, parent)?;
-					$w.write(b"\n***\n\n")?;
+					write!($w, "\n***\n\n")?;
 				}
 			}
 			Ok(()) as io::Result<()>
@@ -104,21 +105,53 @@ fn write_search_terms(w: &mut impl Write, name: &str, trimmed_name: &str) -> io:
 
 
 impl ClassPkg {
-	fn write_mkdocs(&self, w: &mut impl Write, _parent: Option<&PkgCore>) -> io::Result<()> {
+	// pub async fn write_mkdocs<'a, W: Unpin + AsyncWriteExt>(&'a self, w: &'a mut W, class_map: Arc<HashMap<&'a str, &'a ClassPkg>>) -> io::Result<()> {
+	// 	let mut buf: Vec<u8> = Vec::new();
+	// 	buf.extend_from_slice(MKDOCS_COMMENT_HEADER);
+	// 	// write!(&mut buf, MKDOCS_COMMENT_HEADER)?;
+	// 	// w.write(MKDOCS_COMMENT_HEADER).await?;
+	// 	let name = self.core.name.as_ref();
+	// 	let desc = match &self.core.description {
+	// 		Some(d) => d.as_ref(),
+	// 		None => ""
+	// 	};
+
+	// 	writeln!(&mut buf, "# {name}")?;
+	// 	write_search_terms(&mut buf, name, trimmed_cls_name!(self.core.name.as_str()))?;
+		
+	// 	writeln!(&mut buf, "\n{desc}\n")?;
+	// 	let (values, functions, methods) = self.get_all_values(class_map.as_ref());
+
+	// 	write_separated!(self, values.as_slice(), &mut buf, "## Properties\n\n")?;
+	// 	write_separated!(self, functions.as_slice(), &mut buf, "## Functions\n\n")?;
+	// 	write_separated!(self, methods.as_slice(), &mut buf, "## Methods\n\n")?;
+	// 	// debug!("about to write buffer: {buf:?}");
+	// 	w.write(&mut buf).await?;
+		
+
+	// 	Ok(())
+	// }
+	pub fn write_mkdocs<W: Write>(&self, w: &mut W, class_map: &HashMap<&str, &ClassPkg>) -> io::Result<()> {
 		w.write(MKDOCS_COMMENT_HEADER)?;
+		// w.write(MKDOCS_COMMENT_HEADER).await?;
 		let name = self.core.name.as_ref();
 		let desc = match &self.core.description {
 			Some(d) => d.as_ref(),
 			None => ""
 		};
+
 		writeln!(w, "# {name}")?;
 		write_search_terms(w, name, trimmed_cls_name!(self.core.name.as_str()))?;
 		
 		writeln!(w, "\n{desc}\n")?;
 
-		write_separated!(self, self.values.as_slice(), w, b"## Properties\n\n")?;
-		write_separated!(self, self.functions.as_slice(), w, b"## Functions\n\n")?;
-		write_separated!(self, self.methods.as_slice(), w, b"## Methods\n\n")?;
+		// debug!("writing documentation for {self:?}");
+		let (values, functions, methods) = self.get_all_values(class_map);
+		write_separated!(self, values.as_slice(), w, "## Properties\n\n")?;
+		write_separated!(self, functions.as_slice(), w, "## Functions\n\n")?;
+		write_separated!(self, methods.as_slice(), w, "## Methods\n\n")?;
+		// debug!("about to write buffer: {buf:?}");
+		
 
 		Ok(())
 	}
@@ -126,7 +159,7 @@ impl ClassPkg {
 
 
 impl ValuePkg {
-	fn write_mkdocs(&self, w: &mut impl Write, _: Option<&PkgCore>) -> io::Result<()> {
+	pub fn write_mkdocs(&self, w: &mut impl Write, _: Option<&PkgCore>) -> io::Result<()> {
 		let name = self.core.name.as_ref();
 		let desc = self.core.description.as_deref().unwrap_or("");
 		let ty = self.ty.as_deref().unwrap_or("any");
@@ -139,18 +172,12 @@ impl ValuePkg {
 
 }
 
-fn unwrap_box_str_or<'a>(str: Option<&'a Box<str>>, default: &'static str) -> &'a str {
-	match str {
-		Some(s) => s.as_str(),
-		None => default
-	}
-}
 
 
 
 #[inline]
-fn write_param(w: &mut impl Write, param: &FnArg, indentation: usize) -> io::Result<()> {
-	let arg_name = param.name.as_deref().unwrap_or("unnamed");
+fn write_param(w: &mut impl Write, param: &FnArg, indentation: usize, default_name: &'static str) -> io::Result<()> {
+	let arg_name = param.name.as_deref().unwrap_or(default_name);
 	let arg_ty = param.ty.as_deref().unwrap_or("any");
 	
 	write!(w, "{:indentation$}* `{arg_name}` ({arg_ty})", "")?;
@@ -166,7 +193,7 @@ fn write_param(w: &mut impl Write, param: &FnArg, indentation: usize) -> io::Res
 	w.write(b"\n")?;
 	if let Some(table_params) = param.table_params.as_ref() {
 		for tp in table_params.iter() {
-			write_param(w, tp, indentation + 4)?;
+			write_param(w, tp, indentation + 4, default_name)?;
 		}
 	}
 
@@ -175,39 +202,46 @@ fn write_param(w: &mut impl Write, param: &FnArg, indentation: usize) -> io::Res
 
 
 impl FunctionPkg {
-	fn write_mkdocs(&self, w: &mut impl Write, _parent: Option<&PkgCore>) -> io::Result<()> {
+	pub fn write_mkdocs(&self, w: &mut impl Write, _parent: Option<&PkgCore>) -> io::Result<()> {
 		let name = self.core.name.as_ref();
-		let namespace = self.core.namespace.as_ref();
+		let namespace = self.core.namespace();
 
 		let desc = self.core.description.as_deref().unwrap_or("");
 
 		let arg_names: String = self.args.iter()
-			.map(|a| a.name.as_ref().unwrap().as_ref())
+			.map(|a| a.name.as_deref().unwrap())
 			.collect::<Vec<_>>()
 			.join(", ");
 
+		let mut ret_names = self.rets.iter()
+			.map(|a| a.name.as_deref().unwrap_or("result"))
+			.collect::<Vec<_>>()
+			.join(", ");
+		// add an ` = ` if the ret names are big enough
+		if ret_names.len() > 0 {
+			ret_names.push_str(" = ");
+		}
 		writeln!(w, "### `{name}`")?;
 		write_search_terms(w, name, trimmed_fn_name!(self.core.name.as_ref()))?;
-		write!(w, "\n{desc}\n\
-			\n\
-			```lua\n\
-			{namespace}.{name}({arg_names})\n\
+		write!(w, "\n{desc}\n\n")?;
+
+		write!(w, "```lua\n\
+			{ret_names}{namespace}.{name}({arg_names})\n\
 			```\n\
-			\n"
-		)?;
+		")?;
 
 		if self.args.len() > 0 {
-			w.write(b"**Parameters**:\n\n")?;
+			w.write(b"\n**Parameters**:\n\n")?;
 
 			for param in self.args.iter() {
-				write_param(w, param, 0)?;
+				write_param(w, param, 0, "unnamed")?;
 			}
 		}
 		if self.rets.len() > 0 {
-			w.write(b"**Returns**:\n\n")?;
+			w.write(b"\n**Returns**:\n\n")?;
 
 			for param in self.rets.iter() {
-				write_param(w, param, 0)?;
+				write_param(w, param, 0, "result")?;
 			}
 		}
 		Ok(())
@@ -218,7 +252,7 @@ impl FunctionPkg {
 
 
 impl MethodPkg {
-	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&PkgCore>) -> io::Result<()> {
+	pub fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&PkgCore>) -> io::Result<()> {
 		let name = self.core.name.as_ref();
 
 		let desc = self.core.description.as_deref().unwrap_or("");
@@ -234,12 +268,18 @@ impl MethodPkg {
 		// This will be equal to the trimmed name of the class prefixed with the word `my`.
 		let object_name = {
 			let mut trimmed = trimmed_cls_name!(parent.unwrap().name.as_ref()).to_string();
-			let mut new_prefix = String::with_capacity(3);
-			new_prefix.push_str("my");
-			// make sure the first letter of the class name is uppercase
-			new_prefix.push_str(&trimmed[0..1].to_ascii_uppercase());
-			trimmed.replace_range(0..1, &new_prefix);
-			trimmed
+			debug!("trimmed name: {trimmed}");
+			debug!("parent name: {}", parent.unwrap().name.as_ref());
+			if trimmed.len() > 0 {
+				let mut new_prefix = String::with_capacity(3);
+				new_prefix.push_str("my");
+				// make sure the first letter of the class name is uppercase
+				new_prefix.push_str(&trimmed[0..1].to_ascii_uppercase());
+				trimmed.replace_range(0..1, &new_prefix);
+				trimmed
+			} else {
+				String::from("myObject")
+			}
 		};
 
 		write!(w, "\n{desc}\n\
@@ -254,17 +294,46 @@ impl MethodPkg {
 			w.write(b"**Parameters**:\n\n")?;
 
 			for param in self.args.iter() {
-				write_param(w, param, 0)?;
+				write_param(w, param, 0, "unnamed")?;
 			}
 		}
 		if self.rets.len() > 0 {
 			w.write(b"**Returns**:\n\n")?;
 
 			for param in self.rets.iter() {
-				write_param(w, param, 0)?;
+				write_param(w, param, 0, "result")?;
 			}
 		}
 		Ok(())
 	}
 
+}
+
+
+
+impl LibPkg {
+	pub fn write_mkdocs(&self, w: &mut impl Write) -> io::Result<()> {
+		w.write(MKDOCS_COMMENT_HEADER)?;
+		// w.write(MKDOCS_COMMENT_HEADER).await?;
+		let name = self.core.name.as_ref();
+		let desc = match &self.core.description {
+			Some(d) => d.as_ref(),
+			None => ""
+		};
+
+		writeln!(w, "# {name}")?;
+		write_search_terms(w, name, trimmed_cls_name!(self.core.name.as_str()))?;
+		
+		writeln!(w, "\n{desc}\n")?;
+
+		// debug!("writing documentation for {self:?}");
+		let (values, functions) = self.get_all_values();
+		write_separated!(self, values.as_slice(), w, "## Properties\n\n")?;
+		write_separated!(self, functions.as_slice(), w, "## Functions\n\n")?;
+		// write_separated!(self, methods.as_slice(), w, "## Methods\n\n")?;
+		// debug!("about to write buffer: {buf:?}");
+		
+
+		Ok(())
+	}
 }

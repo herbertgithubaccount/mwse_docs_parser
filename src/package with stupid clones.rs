@@ -1,5 +1,5 @@
 
-use std::{collections::HashMap, path::Path};
+use std::path::Path;
 
 use derive_more::{From, TryInto};
 // use log::debug;
@@ -20,7 +20,7 @@ pub struct Example {
 // PACKAGE
 // =============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(C)]
 pub struct PkgCore {
 	/// Name of the package.
@@ -107,7 +107,7 @@ impl EPkg {
 // =============================================================================
 
 /// Stores an argument / return value of a function.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FnArg {
 	pub name: Option<Box<str>>,
 	pub ty: Option<Box<str>>,
@@ -117,7 +117,7 @@ pub struct FnArg {
 	pub table_params: Option<Vec<FnArg>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(C)]
 pub struct FunctionPkg {
 	pub core: PkgCore,
@@ -150,7 +150,7 @@ impl FunctionPkg {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(C)]
 pub struct MethodPkg {
 	pub core: PkgCore,
@@ -187,7 +187,7 @@ impl MethodPkg {
 // CLASSES
 // =============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(C)]
 pub struct ClassPkg {
 	pub core: PkgCore,
@@ -207,44 +207,13 @@ impl ClassPkg {
 	pub fn new(core: PkgCore, is_abstract: bool, inherits: Option<Box<str>>) -> Self {
 		Self {core, inherits, is_abstract, functions: vec![], values: vec![], methods: vec![], ops: vec![]}
 	}
-
-	/// Resolves the inheritance chain and retrieves all the values associated with this class.
-	pub fn get_all_values<'a>(&'a self, class_map: &'a HashMap<&'a str, &'a ClassPkg>) -> (Vec<&'a ValuePkg>, Vec<&'a FunctionPkg>, Vec<&'a MethodPkg>) {
-		let mut values: Vec<&ValuePkg> = self.values.iter().collect();
-		let mut functions: Vec<&FunctionPkg> = self.functions.iter().collect();
-		let mut methods: Vec<&MethodPkg> = self.methods.iter().collect();
-		
-		let mut parent_name = self.inherits.as_deref();
-		while let Some(pname) = parent_name {
-			if let Some(&parent) = class_map.get(pname) {
-				parent_name = parent.inherits.as_deref();
-				for val in &parent.values {
-					values.push(val);
-				}
-				for func in &parent.functions {
-					functions.push(func);
-				}
-				for m in &parent.methods {
-					methods.push(m);
-				}
-			} else {
-				panic!("Class {:?} inherits from a class named {pname:?}, but we could not find any documentation for that class.", 
-					self.core.name.as_ref()
-				)
-			}
-		}
-		values.sort_by(|a,b| a.core.name.cmp(&b.core.name));
-		functions.sort_by(|a,b| a.core.name.cmp(&b.core.name));
-		methods.sort_by(|a,b| a.core.name.cmp(&b.core.name));
-		(values, functions, methods)
-	}
 }
 
 // =============================================================================
 // VALUES
 // =============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(C)]
 pub struct ValuePkg {
 	pub core: PkgCore,
@@ -255,7 +224,7 @@ pub struct ValuePkg {
 	/// The default value
 	pub default: Option<Lit>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(C)]
 pub struct OperatorPkg {
 	pub core: PkgCore,
@@ -267,7 +236,7 @@ pub struct OperatorPkg {
 /// ```lua
 /// { rightType = "niColor", resultType = "niColor", description = "Adds the color channel values of two `niColor` objects." },
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Overload {
 	pub right_ty: Option<Box<str>>,
 	pub result_ty: Option<Box<str>>,
@@ -295,20 +264,6 @@ pub struct LibPkg {
 impl LibPkg {
 	pub fn new(core: PkgCore, link: Option<Box<str>>) -> Self {
 		Self { core, link, sublibs: vec![], functions: vec![], values: vec![] }
-	}
-
-	pub fn get_all_values(&self) -> (Vec<&ValuePkg>, Vec<&FunctionPkg>) {
-		let mut values: Vec<&ValuePkg> = self.values.iter().collect();
-		let mut functions: Vec<&FunctionPkg> = self.functions.iter().collect();
-
-		for sublib in &self.sublibs {
-			let (vals, fns) = sublib.get_all_values();
-			values.extend(vals);
-			functions.extend(fns);
-		}
-		values.sort_by(|a,b| a.core.name.cmp(&b.core.name));
-		functions.sort_by(|a,b| a.core.name.cmp(&b.core.name));
-		(values, functions)
 	}
 }
 
