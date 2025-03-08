@@ -185,6 +185,7 @@ pub struct ClassPkg {
 
 	pub functions: Vec<FunctionPkg>,
 	pub methods: Vec<MethodPkg>,
+	pub ops: Vec<OperatorPkg>
 }
 
 impl ClassPkg {
@@ -235,14 +236,16 @@ pub struct Overload {
 // LIBRARIES
 // =============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[repr(C)]
 pub struct LibPkg {
 	pub core: PkgCore,
 	/// External link
 	pub link: Option<Box<str>>,
 	///For libraries with sub-namespaces such as mwse.mcm, etc., this array contians the nested namespaces.
-	pub sublibs: Option<Vec<LibPkg>>,
+	pub sublibs: Vec<LibPkg>,
+	pub functions: Vec<FunctionPkg>,
+	pub values: Vec<ValuePkg>,
 	// pub rets: Vec<FnArg>,
 }
 

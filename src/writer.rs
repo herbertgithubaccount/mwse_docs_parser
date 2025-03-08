@@ -18,15 +18,15 @@ const LUA_COMMENT_HEADER: &'static [u8; 164] = br#"--[[
 "#;
 
 
-pub trait Writable {
-	/// Write the mkdocs documentation
-	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&PkgCore>) -> io::Result<()>;
-	// / Write the Emmy documentation
-	// fn write_lua(&self, w: &mut impl Write, parent: Option<&Pkg<PkgTy>>) -> io::Result<()> {
-	// 	todo!("Figure out the lua thing")
-	// }
+// pub trait Writable {
+// 	/// Write the mkdocs documentation
+// 	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&PkgCore>) -> io::Result<()>;
+// 	// / Write the Emmy documentation
+// 	// fn write_lua(&self, w: &mut impl Write, parent: Option<&Pkg<PkgTy>>) -> io::Result<()> {
+// 	// 	todo!("Figure out the lua thing")
+// 	// }
 
-}
+// }
 // impl Writable<!> for ! {
 // 	fn write_mkdocs(&self, _w: &mut impl Write, _parent: Option<&!>) -> io::Result<()> {
 // 		unreachable!("Something must have gone seriously wrong to get here.")
@@ -103,7 +103,7 @@ fn write_search_terms(w: &mut impl Write, name: &str, trimmed_name: &str) -> io:
 
 
 
-impl Writable for ClassPkg {
+impl ClassPkg {
 	fn write_mkdocs(&self, w: &mut impl Write, _parent: Option<&PkgCore>) -> io::Result<()> {
 		w.write(MKDOCS_COMMENT_HEADER)?;
 		let name = self.core.name.as_ref();
@@ -125,7 +125,7 @@ impl Writable for ClassPkg {
 }
 
 
-impl Writable for ValuePkg {
+impl ValuePkg {
 	fn write_mkdocs(&self, w: &mut impl Write, _: Option<&PkgCore>) -> io::Result<()> {
 		let name = self.core.name.as_ref();
 		let desc = self.core.description.as_deref().unwrap_or("");
@@ -174,7 +174,7 @@ fn write_param(w: &mut impl Write, param: &FnArg, indentation: usize) -> io::Res
 }
 
 
-impl Writable for FunctionPkg {
+impl FunctionPkg {
 	fn write_mkdocs(&self, w: &mut impl Write, _parent: Option<&PkgCore>) -> io::Result<()> {
 		let name = self.core.name.as_ref();
 		let namespace = self.core.namespace.as_ref();
@@ -217,7 +217,7 @@ impl Writable for FunctionPkg {
 
 
 
-impl Writable for MethodPkg {
+impl MethodPkg {
 	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&PkgCore>) -> io::Result<()> {
 		let name = self.core.name.as_ref();
 
@@ -241,7 +241,7 @@ impl Writable for MethodPkg {
 			trimmed.replace_range(0..1, &new_prefix);
 			trimmed
 		};
-		
+
 		write!(w, "\n{desc}\n\
 			\n\
 			```lua\n\

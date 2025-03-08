@@ -16,15 +16,16 @@ mod parse;
 mod writer;
 pub mod package;
 pub mod error;
-use std::{collections::HashMap, path::{Path, PathBuf}, pin::Pin};
+use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, pin::Pin, sync::Arc};
 
 use derive_more::{Display, From};
 use error::Error;
 use lex::LexError;
 use log::{debug, error, info, trace, warn};
-use package::{ClassPkg, EPkg, EventPkg, FunctionPkg, LibPkg, MethodPkg, OperatorPkg, PkgCore, ValuePkg};
+use package::{ClassPkg, EPkg, EventPkg, Example, FunctionPkg, LibPkg, MethodPkg, OperatorPkg, PkgCore, ValuePkg};
 pub use parse::*;
-use writer::Writable;
+use tokio::task::JoinHandle;
+// use writer::Writable;
 
 
 // struct DirPackage
@@ -80,16 +81,83 @@ impl DirPackages {
 }
 
 
+fn process_file(path: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<EPkg, Error>>>> {
+	Box::pin(async move {
+			
+		// Only return a file if we were able to parse it.
+		// Log the errors instead of killing the whole program.
+		let mut epkg = match EPkg::parse_from_file(&path).await {
+			Err(e) => {
+				error!("{path:?}: {e:?}");
+				return Err(e);
+			},
+			Ok(epkg) => epkg,
+		};
 
-fn process(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<DirPackages, Error>>>> {
+
+
+		let matching_dir = path.with_extension("");
+
+		if matching_dir.exists() && matching_dir.is_dir() {
+			// things to ignore when processing the directory
+			let example_paths = match epkg.core().examples.as_ref() {
+				Some(examples) => examples.iter().map(|e| e.path.clone()).collect(),
+				None => HashSet::new(),
+			};
+			let children = process_dir(matching_dir, example_paths).await?;
+
+			if children.len() > 0 {
+				match &mut epkg {
+					EPkg::Class(cls_pkg) => for child in children {
+						match child {
+							EPkg::Function(pkg) => cls_pkg.functions.push(pkg),
+							EPkg::Method(pkg) => cls_pkg.methods.push(pkg),
+							EPkg::Operator(pkg) => cls_pkg.ops.push(pkg),
+							EPkg::Value(pkg) => cls_pkg.values.push(pkg),
+							
+							p => todo!("is this even possible? child = {:?}", p.core().name),
+						}
+					
+					},
+					EPkg::Lib(lib_pkg) => for child in children {
+						match child {
+							EPkg::Function(pkg) => lib_pkg.functions.push(pkg),
+							// EPkg::Method(pkg) => lib_pkg.methods.push(pkg),
+							EPkg::Lib(pkg) => lib_pkg.sublibs.push(pkg),
+							EPkg::Value(pkg) => lib_pkg.values.push(pkg),
+							
+							p => todo!("is this even possible? child = {:?}", p.core().name),
+						}
+					},
+	
+					// p => todo!("is this even possible? parent = {:?}", p.core().name),
+					EPkg::Function(par) => todo!("is this even possible? par = Function({:?}). children.len() = {}", par.core.name.as_ref(), children.len()),
+					EPkg::Method(par) => todo!("is this even possible? par = Method({:?}). children.len() = {}", par.core.name.as_ref(), children.len()),
+					EPkg::Value(par) => todo!("is this even possible? par = Value({:?}). children.len() = {}", par.core.name.as_ref(), children.len()),
+					EPkg::Event(par) => todo!("is this even possible? par = Event({:?}). children.len() = {}", par.core.name.as_ref(), children.len()),
+					EPkg::Operator(par) => todo!("is this even possible? par = Operator({:?}). children.len() = {}", par.core.name.as_ref(), children.len()),
+				}
+				// return Some((epkg, path))
+			}
+		}
+	
+
+		Ok(epkg)
+	})
+}
+
+
+
+/// Scans through `dir` and parses all packages defined with it. The `ignore` parameter specifies which
+/// filepaths should be skipped when iterating. It is obtained from parsing the `examples` parameter of the parent component.
+fn process_dir(dir: PathBuf, ignore: HashSet<Box<str>>) -> Pin<Box<dyn Send + Sync + Future<Output = Result<Vec<EPkg>, Error>>>> {
 	Box::pin(async move {
 		trace!("processing {dir:?}");
 		let mut stream = tokio::fs::read_dir(dir).await?;
-		let mut pkgs = DirPackages::default();
-		let mut dir_handles = Vec::new();
+		let mut pkgs = Vec::new();
 
 		let mut file_handles = Vec::new();
-		
+		info!("filtering with hashet = {:?}", ignore);
 		while let Some(entry) = stream.next_entry().await? {
 			
 			// Don't have to wait very long for this.
@@ -97,50 +165,111 @@ fn process(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<Dir
 			// This means less branching later on.
 			let ft = entry.file_type().await?;
 
-			if ft.is_dir() {
-				dir_handles.push(tokio::spawn(process(entry.path())));
-			} else if ft.is_file() {
-				file_handles.push(tokio::spawn(async move {
-					let path = entry.path();
-					// Only return a file if we were able to parse it.
-					// Log the errors instead of killing the whole program.
-					match EPkg::parse_from_file(&path).await {
-						Ok(epkg) => return Some(epkg),
-						Err(Error::Lex(l)) => warn!("File {path:?} had could not be lexed: {l:?}"),
-						Err(e) => error!("Could not parse file {path:?}: {e:?}")
-					}
-					None
-				}));
+			// directories are handled in recursive calls
+			if !ft.is_file() {
+				continue;
 			}
+			// don't even try to parse the examples
+			let path: PathBuf = entry.path().with_extension("");
+			let filename = path.file_name().unwrap().to_str().unwrap();
+			if ignore.contains(filename) {
+				continue;
+			}
+
+			file_handles.push(tokio::spawn(process_file(entry.path())));
 		}
 		
-
-		for handle in dir_handles {
-			pkgs.extend(handle.await??);
-		}
 		for file_handle in file_handles {
-			if let Some(epkg) = file_handle.await? {
-				pkgs.add_pkg(epkg);
+			if let Ok(epkg) = file_handle.await? {
+				pkgs.push(epkg);
 			}
 		}
-		// println!("read {num_read} files");
 		return Ok(pkgs);
 	})
 }
 pub struct DocPackages {
-	pub types: DirPackages,
-	pub globals: DirPackages,
-	pub events: DirPackages,
+	pub types: Vec<ClassPkg>,
+	pub globals: Vec<EPkg>,
+	pub events: Vec<EventPkg>,
 }
 
-impl DocPackages {
-	pub async fn new() -> Result<DocPackages, Error> {
-		
+const NAMED_TYPES_PATH: &'static str = "docs/namedTypes";
+const GLOBALS_PATH: &'static str = "docs/global";
+const EVENTS_PATH: &'static str = "docs/events/standard";
 
-		// initialize the above variables using threads
-		let tys_h = tokio::spawn(process(PathBuf::from("docs/namedTypes")));
-		let globs_h = tokio::spawn(process(PathBuf::from("docs/global")));
-		let evs_h = tokio::spawn(process(PathBuf::from("docs/events")));
+impl DocPackages {
+
+
+	pub async fn new() -> Result<DocPackages, Error> {
+
+		// stores all the class packages from `namedTypes`
+		let tys_h = tokio::spawn(async {
+			info!("Loading {NAMED_TYPES_PATH:?}...");
+			let mut stream = tokio::fs::read_dir(NAMED_TYPES_PATH).await?;
+			let mut classes = Vec::new();
+
+			let mut file_handles = Vec::new();
+			
+			while let Some(entry) = stream.next_entry().await? {
+				let ft = entry.file_type().await?;
+				if !ft.is_file() { continue; } 
+				file_handles.push(tokio::spawn(process_file(entry.path())));
+			}
+			for file_handle in file_handles {
+				match file_handle.await? {
+					Ok(EPkg::Class(cls)) => classes.push(cls),
+					Ok(pkg) => unreachable!("Found a type that isn't a class. What would the Java creators think of this.... {pkg:?}"),
+					Err(e) => return Err(e)
+				}
+			}
+			// println!("read {num_read} files");
+			return Ok(classes);
+		});
+		
+		// stores all the globals from `globals`
+		let globs_h: JoinHandle<Result<Vec<EPkg>, Error>> = tokio::spawn(async {
+			info!("Loading {GLOBALS_PATH:?}...");
+			let mut stream = tokio::fs::read_dir(GLOBALS_PATH).await?;
+			let mut pkgs = Vec::new();
+
+			let mut file_handles = Vec::new();
+			
+			while let Some(entry) = stream.next_entry().await? {
+				let ft = entry.file_type().await?;
+				if !ft.is_file() { continue; }
+
+				file_handles.push(tokio::spawn(process_file(entry.path())));
+			}
+			for file_handle in file_handles {
+				pkgs.push(file_handle.await??);
+			}
+			// println!("read {num_read} files");
+			return Ok(pkgs);
+		});
+
+		// stores all the events from `events/standard`
+		let evs_h = tokio::spawn(async {
+			info!("Loading {EVENTS_PATH:?}...");
+			let mut stream = tokio::fs::read_dir(EVENTS_PATH).await?;
+			let mut events = Vec::new();
+
+			let mut file_handles = Vec::new();
+			
+			while let Some(entry) = stream.next_entry().await? {
+				let ft = entry.file_type().await?;
+				if !ft.is_file() { continue; } 
+				file_handles.push(tokio::spawn(process_file(entry.path())));
+			}
+			for file_handle in file_handles {
+				match file_handle.await? {
+					Ok(EPkg::Event(event)) => events.push(event),
+					Ok(pkg) => unreachable!("Found an event that isn't an event. What....? {pkg:?}"),
+					Err(e) => return Err(e)
+				}
+			}
+			// println!("read {num_read} files");
+			return Ok(events);
+		});
 
 		match (tys_h.await?, globs_h.await?, evs_h.await?) {
 			(Ok(types), Ok(globals), Ok(events)) => {
@@ -148,6 +277,23 @@ impl DocPackages {
 			},
 			e => panic!("{e:?}")
 		}
+	}
+
+	pub fn total_len(&self) -> usize {
+		let mut total = self.types.len() + self.globals.len() + self.events.len();
+		for cls in &self.types {
+			total += cls.functions.len() + cls.methods.len() + cls.ops.len() + cls.values.len();
+		}
+		for lib in &self.globals {
+			if let  EPkg::Lib(lib) = lib  {
+				total += lib.functions.len() + lib.values.len() + lib.sublibs.len();
+			} else {
+				// info!("nonlib global: {lib:?}");
+			}
+		}
+		info!("num events: {}", self.events.len());
+
+		total
 	}
 }
 
@@ -158,8 +304,8 @@ async fn gather_files() -> Result<(), Error> {
 
 	let pkgs = DocPackages::new().await?;
 
-	let mut cls_map = HashMap::with_capacity(pkgs.types.classes.len());
-	for cls in &pkgs.types.classes {
+	let mut cls_map = HashMap::with_capacity(pkgs.types.len());
+	for cls in &pkgs.types {
 		cls_map.insert(cls.core.name.as_ref(), cls);
 	}
 	// for 
@@ -186,7 +332,8 @@ async fn main() -> Result<(), Error> {
 
 
 	let elapsed = now.elapsed();
-	let total = pkgs.events.total_len() + pkgs.types.total_len() + pkgs.globals.total_len();
+	let total = pkgs.total_len();
+	// let total = pkgs.events.len() + pkgs.types.len() + pkgs.globals.len();
 	println!("Processed {total} files in {elapsed:.2?}.");
 
 

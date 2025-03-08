@@ -845,10 +845,10 @@ impl FromTokens for EPkg {
 		debug!("returning packagetype {file_type_str}");
 		// TODO: trigger error if value does not match parsed parameters
 		match file_type_str.as_ref() {
-			"class" => Ok(EPkg::Class(ClassPkg{core, inherits, ..Default::default()})),
+			"class" => Ok(EPkg::Class(ClassPkg{core, inherits, is_abstract, ..Default::default()})),
 			"function" => Ok(EPkg::Function(FunctionPkg{core, args, rets})),
 			"method" => Ok(EPkg::Method(MethodPkg{core, args, rets})),
-			"lib" => Ok(EPkg::Lib(LibPkg{core, link, sublibs: None})),
+			"lib" => Ok(EPkg::Lib(LibPkg{core, link, ..Default::default()})),
 			"event" => Ok(EPkg::Event(EventPkg{core, filter, blockable, event_data, links, related})),
 			"operator" => Ok(EPkg::Operator(OperatorPkg{core, overloads})),
 			_ => do yeet ParseErr::BadPkgTy(file_type_str)
