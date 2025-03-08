@@ -100,8 +100,52 @@ impl DirPackages {
 	}
 }
 
+#[derive(Debug)]
+enum ProcessedEntry {
+	File(EPkg),
+	Dir(DirPackages),
+	Nothing,
+}
 
 fn process(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<DirPackages, Error>>>> {
+	Box::pin(async move {
+		trace!("processing {dir:?}");
+		let mut stream = tokio::fs::read_dir(dir).await?;
+		let mut pkgs = DirPackages::default();
+
+		let mut handles = Vec::new();
+		
+		while let Some(entry) = stream.next_entry().await? {
+			handles.push(tokio::spawn(async move {
+				let ft = entry.file_type().await?;
+				if ft.is_file() {
+					let path = entry.path();
+
+					match EPkg::parse_from_file(&path).await {
+						Ok(epkg) => return Ok(ProcessedEntry::File(epkg)),
+						Err(Error::Lex(l)) => warn!("File {path:?} had could not be lexed: {l:?}"),
+						Err(e) => error!("Could not parse file {path:?}: {e:?}")
+					}
+				} else if ft.is_dir() {
+					return Ok(ProcessedEntry::Dir(process(entry.path()).await?));
+				}
+
+				Ok(ProcessedEntry::Nothing)
+			}));
+		}
+		for handle in handles {
+			match handle.await? {
+				Ok(ProcessedEntry::Dir(pkgs2)) => pkgs.extend(pkgs2),
+				Ok(ProcessedEntry::File(epkg)) => pkgs.add_pkg(epkg),
+				Ok(ProcessedEntry::Nothing) => (),
+				Err(e) => {error!("{e:?}"); return Err(e)},
+			}
+		}
+		return Ok(pkgs);
+	})
+}
+
+fn process2(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<DirPackages, Error>>>> {
 	Box::pin(async move {
 		trace!("processing {dir:?}");
 		let mut stream = tokio::fs::read_dir(dir).await?;
@@ -109,22 +153,18 @@ fn process(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<Dir
 		let mut dir_handles = Vec::new();
 
 		let mut file_handles = Vec::new();
-		// let mut filepaths = Vec::new();
+		
 		while let Some(entry) = stream.next_entry().await? {
-			// dbg!(entry);
-			// if entry.
-			// info!("processing {entry:?}");
+			
 			let ft = entry.file_type().await?;
+
+
+
 			if ft.is_file() {
-				// filepaths.push(entry.path());
 				file_handles.push(tokio::spawn(async move {
 					let path = entry.path();
-					// let epkg = EPkg::parse_from_file(&path).await;
-					// (epkg, path)
-					// (&path, EPkg::parse_from_file(&path).await)
 					match EPkg::parse_from_file(&path).await {
 						Ok(epkg) => return Some(epkg),
-						// Ok(epkg) => pkgs.add_pkg(epkg),
 						Err(Error::Lex(l)) => warn!("File {path:?} had could not be lexed: {l:?}"),
 						Err(e) => error!("Could not parse file {path:?}: {e:?}")
 					}
@@ -136,38 +176,20 @@ fn process(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<Dir
 				// pkgs.extend(process(entry.path()).await?);
 			}
 		}
-		// for path in filepaths {
-		// 	match EPkg::parse_from_file(&path).await {
-		// 		Ok(epkg) => pkgs.add_pkg(epkg),
-		// 		Err(Error::Lex(l)) => warn!("File {path:?} had could not be lexed: {l:?}"),
-		// 		Err(e) => error!("Could not parse file {path:?}: {e:?}")
-		// 	}
-		// }
+		
+
+		for handle in dir_handles {
+			pkgs.extend(handle.await??);
+		}
 		for file_handle in file_handles {
 			if let Some(epkg) = file_handle.await? {
 				pkgs.add_pkg(epkg);
 			}
-			// match file_handle.await? {
-			// 	// Ok(epkg) => Ok(epkg),
-			// 	(Ok(epkg), _) => pkgs.add_pkg(epkg),
-			// 	(Err(Error::Lex(l)), path)=> warn!("File {path:?} had could not be lexed: {l:?}"),
-			// 	(Err(e), path) => error!("Could not parse file {path:?}: {e:?}")
-			// }
-			// match EPkg::parse_from_file(&path).await {
-			// 	Ok(epkg) => pkgs.add_pkg(epkg),
-			// 	Err(Error::Lex(l)) => warn!("File {path:?} had could not be lexed: {l:?}"),
-			// 	Err(e) => error!("Could not parse file {path:?}: {e:?}")
-			// }
-		}
-
-		for handle in dir_handles {
-			pkgs.extend(handle.await??);
 		}
 		// println!("read {num_read} files");
 		return Ok(pkgs);
 	})
 }
-
 pub struct DocPackages {
 	pub types: DirPackages,
 	pub globals: DirPackages,
@@ -180,6 +202,7 @@ impl DocPackages {
 		let types;
 		let globals;
 		let events;
+
 		// initialize the above variables using threads
 		{
 
@@ -289,33 +312,10 @@ async fn main() -> Result<(), Error> {
 	use std::time::Instant;
     let now = Instant::now();
 
-	let pkg_tys;
-	let pkg_globals;
-	let pkg_events;
     // Code block to measure.
-    {
-
-		let named_types = tokio::spawn(process(PathBuf::from("docs/namedTypes")));
-		let globals = tokio::spawn(process(PathBuf::from("docs/global")));
-		let events = tokio::spawn(process(PathBuf::from("docs/events")));
-
-		// named_types.
-		match named_types.await? {
-			Ok(num) => pkg_tys = num,
-			Err(e) => panic!("{e:?}"),
-		}
-		match globals.await? {
-			Ok(num) => pkg_globals = num,
-			Err(e) => panic!("{e:?}"),
-		}
-		
-		match events.await? {
-			Ok(num) => pkg_events = num,
-			Err(e) => panic!("{e:?}"),
-		}
-	}
+	let pkgs = DocPackages::new().await?;
 	let elapsed = now.elapsed();
-	let total = pkg_events.total_len() + pkg_tys.total_len() + pkg_globals.total_len();
+	let total = pkgs.events.total_len() + pkgs.types.total_len() + pkgs.globals.total_len();
 	println!("Processed {total} files in {elapsed:.2?}.");
 	// let tokens = lex::get_tokens(input);
 

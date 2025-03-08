@@ -3,7 +3,7 @@ use std::path::Path;
 
 use log::{debug, log_enabled, trace};
 
-use crate::{error::Error, lex::{self, Kw, Lit, Punc, Token, TokenIter}, package::{ClassPkg, EPkg, EventDatum, EventLink, EventPkg, Example, FnArg, FunctionPkg, LibPkg, MethodPkg, OperatorPkg, Overload, PkgCore, ValuePkg}};
+use crate::{error::Error, lex::{Kw, Lit, Punc, Token, TokenIter}, package::{ClassPkg, EPkg, EventDatum, EventLink, EventPkg, Example, FnArg, FunctionPkg, LibPkg, MethodPkg, OperatorPkg, Overload, PkgCore, ValuePkg}};
 use derive_more::Debug;
 
 
@@ -19,6 +19,7 @@ pub enum ParseErr{
 	/// A special identifier showed up in a place it shouldn't have.
 	#[debug("UnsupportedKeyword{{expected: {_1:?}, got: '{_0:?}'}}")]
 	UnsupportedKeyword(Option<Token>, Kw),
+	#[debug("Bad Package Type: {_0:?} is not supported.")]
 	BadPkgTy(Box<str>),
 	UnexpectedLit(Lit),
 	UnexpectedIdent(Box<str>),
