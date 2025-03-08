@@ -156,8 +156,8 @@ fn process2(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<Di
 		
 		while let Some(entry) = stream.next_entry().await? {
 			
+			// won't have to wait very long for this one
 			let ft = entry.file_type().await?;
-
 
 
 			if ft.is_file() {
@@ -206,9 +206,9 @@ impl DocPackages {
 		// initialize the above variables using threads
 		{
 
-			let types_handle = tokio::spawn(process(PathBuf::from("docs/namedTypes")));
-			let globals_handle = tokio::spawn(process(PathBuf::from("docs/global")));
-			let events_handle = tokio::spawn(process(PathBuf::from("docs/events")));
+			let types_handle = tokio::spawn(process2(PathBuf::from("docs/namedTypes")));
+			let globals_handle = tokio::spawn(process2(PathBuf::from("docs/global")));
+			let events_handle = tokio::spawn(process2(PathBuf::from("docs/events")));
 
 			// named_types.
 			match types_handle.await? {
