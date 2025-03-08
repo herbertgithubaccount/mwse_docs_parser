@@ -1,6 +1,6 @@
 
 use std::fmt;
-use crate::package::{Class, EPkg, Function, Method, Pkg, Value};
+use crate::package::{ClassPkg, EPkg, FnArg, FunctionPkg, MethodPkg, PkgCore, ValuePkg};
 use crate::FromTokens;
 use std::io::Write;
 use std::io;
@@ -18,159 +18,252 @@ const LUA_COMMENT_HEADER: &'static [u8; 164] = br#"--[[
 "#;
 
 
-pub trait Writable<P = !> where Pkg<P>: Writable {
+pub trait Writable {
 	/// Write the mkdocs documentation
-	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&Pkg<P>>) -> io::Result<()>;
+	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&PkgCore>) -> io::Result<()>;
 	// / Write the Emmy documentation
 	// fn write_lua(&self, w: &mut impl Write, parent: Option<&Pkg<PkgTy>>) -> io::Result<()> {
 	// 	todo!("Figure out the lua thing")
 	// }
 
 }
-impl Writable<!> for Pkg<!>{
-	fn write_mkdocs(&self, _w: &mut impl Write, _parent: Option<&Pkg<!>>) -> io::Result<()> {
-		unreachable!("Something must have gone seriously wrong to get here.")
+// impl Writable<!> for ! {
+// 	fn write_mkdocs(&self, _w: &mut impl Write, _parent: Option<&!>) -> io::Result<()> {
+// 		unreachable!("Something must have gone seriously wrong to get here.")
+// 	}
+// }
+
+
+
+macro_rules! trim_start_matches {
+	($val:expr; $($lit:literal),+) => {
+		{
+			let trimmed = $val $( .trim_start_matches($lit) )+ ;
+			if trimmed == $val {
+				""
+			} else {
+				trimmed
+			}
+		}
+		
+		
+	};
+}
+
+macro_rules! trimmed_fn_name {
+	($fn_name:expr) => {
+		trim_start_matches!($fn_name; 
+			"get", "set", "mod",
+			"is", "has", "can",
+			"open", "close",
+			"add", "remove",
+			"enable", "disable",
+			"apply", "update",
+			"find", "show",
+			"create", "delete",
+			"test", "toggle"
+		)
+	};
+}
+macro_rules! trimmed_cls_name {
+	($cls_name:expr) => {
+		trim_start_matches!($cls_name; "ni", "tes3ui", "tes3", "mwse", "mcm")
+	};
+}
+/// Writes a list of seperated things.
+/// Used to write functions and fields
+macro_rules! write_separated {
+	($parent:ident, $items:expr, $w:ident, $header:literal) => {
+		{
+			let parent = Some(&$parent.core);
+			if $items.len() > 0  {
+				$w.write($header)?;
+				for val in $items {
+					val.write_mkdocs($w, parent)?;
+					$w.write(b"\n***\n\n")?;
+				}
+			}
+			Ok(()) as io::Result<()>
+		}
+	};
+}
+
+
+fn write_search_terms(w: &mut impl Write, name: &str, trimmed_name: &str) -> io::Result<()> {
+	let name_lower = name.to_ascii_lowercase();
+	let trimmed_name = trimmed_name.to_ascii_lowercase();
+	if trimmed_name.len() > 0 {
+		writeln!(w, r#"<div class="search_terms" style="display: none">{name_lower}, {trimmed_name}</div>"#)?;
+	} else {
+		writeln!(w, r#"<div class="search_terms" style="display: none">{name_lower}</div>"#)?;
+	}
+	Ok(())
+}
+
+
+
+
+impl Writable for ClassPkg {
+	fn write_mkdocs(&self, w: &mut impl Write, _parent: Option<&PkgCore>) -> io::Result<()> {
+		w.write(MKDOCS_COMMENT_HEADER)?;
+		let name = self.core.name.as_ref();
+		let desc = match &self.core.description {
+			Some(d) => d.as_ref(),
+			None => ""
+		};
+		writeln!(w, "# {name}")?;
+		write_search_terms(w, name, trimmed_cls_name!(self.core.name.as_str()))?;
+		
+		writeln!(w, "\n{desc}\n")?;
+
+		write_separated!(self, self.values.as_slice(), w, b"## Properties\n\n")?;
+		write_separated!(self, self.functions.as_slice(), w, b"## Functions\n\n")?;
+		write_separated!(self, self.methods.as_slice(), w, b"## Methods\n\n")?;
+
+		Ok(())
 	}
 }
 
-impl<P> Pkg<P> where Pkg<P>: Writable {
-	fn write_sep<C>(&self, items: &[Pkg<C>], w: &mut impl Write) -> io::Result<()> 
-	where Pkg<C>: Writable<P>
-	{
-		let parent = Some(self);
-		if let Some(val) = items.first() {
-			val.write_mkdocs(w, parent)?;
-			for val in &items[1..] {
-				w.write(b"***\n")?;
-				val.write_mkdocs(w, parent)?;
+
+impl Writable for ValuePkg {
+	fn write_mkdocs(&self, w: &mut impl Write, _: Option<&PkgCore>) -> io::Result<()> {
+		let name = self.core.name.as_ref();
+		let desc = self.core.description.as_deref().unwrap_or("");
+		let ty = self.ty.as_deref().unwrap_or("any");
+
+		writeln!(w, "### `{name}`")?;
+		write_search_terms(w, name, "")?;
+		write!(w, "\n{desc}\n\n**Returns**:\n\n* `result` ({ty})\n")?;
+		Ok(())
+	}
+
+}
+
+fn unwrap_box_str_or<'a>(str: Option<&'a Box<str>>, default: &'static str) -> &'a str {
+	match str {
+		Some(s) => s.as_str(),
+		None => default
+	}
+}
+
+
+
+#[inline]
+fn write_param(w: &mut impl Write, param: &FnArg, indentation: usize) -> io::Result<()> {
+	let arg_name = param.name.as_deref().unwrap_or("unnamed");
+	let arg_ty = param.ty.as_deref().unwrap_or("any");
+	
+	write!(w, "{:indentation$}* `{arg_name}` ({arg_ty})", "")?;
+
+	let arg_desc = param.description.as_deref().unwrap_or("");
+	if param.optional {
+		write!(w, ": *Optional*. {arg_desc}")?;
+	} else if let Some(def) = param.default.as_ref() {
+		write!(w, ": *Default*: `{def:?}`. {arg_desc}")?;
+	} else if arg_desc.len() > 0 {
+		write!(w, ": {arg_desc}")?;
+	}
+	w.write(b"\n")?;
+	if let Some(table_params) = param.table_params.as_ref() {
+		for tp in table_params.iter() {
+			write_param(w, tp, indentation + 4)?;
+		}
+	}
+
+	Ok(())
+}
+
+
+impl Writable for FunctionPkg {
+	fn write_mkdocs(&self, w: &mut impl Write, _parent: Option<&PkgCore>) -> io::Result<()> {
+		let name = self.core.name.as_ref();
+		let namespace = self.core.namespace.as_ref();
+
+		let desc = self.core.description.as_deref().unwrap_or("");
+
+		let arg_names: String = self.args.iter()
+			.map(|a| a.name.as_ref().unwrap().as_ref())
+			.collect::<Vec<_>>()
+			.join(", ");
+
+		writeln!(w, "### `{name}`")?;
+		write_search_terms(w, name, trimmed_fn_name!(self.core.name.as_ref()))?;
+		write!(w, "\n{desc}\n\
+			\n\
+			```lua\n\
+			{namespace}.{name}({arg_names})\n\
+			```\n\
+			\n"
+		)?;
+
+		if self.args.len() > 0 {
+			w.write(b"**Parameters**:\n\n")?;
+
+			for param in self.args.iter() {
+				write_param(w, param, 0)?;
+			}
+		}
+		if self.rets.len() > 0 {
+			w.write(b"**Returns**:\n\n")?;
+
+			for param in self.rets.iter() {
+				write_param(w, param, 0)?;
 			}
 		}
 		Ok(())
 	}
-}
-
-
-
-
-impl Writable for Pkg<Class> {
-	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&Pkg<!>>) -> io::Result<()> {
-		w.write(MKDOCS_COMMENT_HEADER)?;
-		let name = self.name.as_ref();
-		let name_lower = name.to_lowercase();
-		let desc = match &self.description {
-			Some(d) => d.as_ref(),
-			None => ""
-		};
-		writeln!(w, "{name}")?;
-		writeln!(w, r#"<div class="search_terms" style="display: none">{name_lower}</div>"#)?;
-		writeln!(w, "\n{desc}\n")?;
-
-		writeln!(w, "## Properties")?;
-		self.write_sep(self.ty.values.as_slice(), w)?;
-		writeln!(w, "## Functions")?;
-		self.write_sep(self.ty.functions.as_slice(), w)?;
-		writeln!(w, "## Methods")?;
-		self.write_sep(self.ty.methods.as_slice(), w)?;
-
-		Ok(())
-	}
-}
-
-
-impl<P> Writable<P> for Pkg<Value> where Pkg<P>: Writable {
-	fn write_mkdocs(&self, w: &mut impl Write, _: Option<&Pkg<P>>) -> io::Result<()> {
-		let name = self.name.as_ref();
-		let name_lower = name.to_lowercase();
-		let desc = match self.description.as_ref() {
-			Some(s) => s.as_ref(),
-			None => ""
-		};
-		let ty = match self.ty.ty.as_ref() {
-			Some(ty) => ty.as_ref(),
-			None => "any"
-		};
-
-		write!(w, 
-r#"
-### `{name}`
-<div class="search_terms" style="display: none">{name_lower}</div>
-
-{desc}
-
-**Returns**:
-
-* `result` ({ty})
-
-"#
-		)?;
-		Ok(())
-	}
 
 }
 
 
-impl<P> Writable<P> for Pkg<Function> where Pkg<P>: Writable {
-	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&Pkg<P>>) -> io::Result<()> {
-		let name = self.name.as_ref();
-		let name_lower = name.to_lowercase();
-		let desc = match self.description.as_ref() {
-			Some(s) => s.as_ref(),
-			None => ""
-		};
-		let Some(parent) = parent else {panic!("Error: Parent must be provided!")};
-		let parent_name = parent.name.as_str();
 
-		let arg_names: String = self.ty.args.iter()
+impl Writable for MethodPkg {
+	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&PkgCore>) -> io::Result<()> {
+		let name = self.core.name.as_ref();
+
+		let desc = self.core.description.as_deref().unwrap_or("");
+
+		let arg_names: String = self.args.iter()
 			.map(|a| a.name.as_ref().unwrap().as_ref())
 			.collect::<Vec<_>>()
 			.join(", ");
 
-		write!(w, 
-r#"
-### `{name}`
-<div class="search_terms" style="display: none">{name_lower}</div>
+		writeln!(w, "### `{name}`")?;
+		write_search_terms(w, name, trimmed_fn_name!(self.core.name.as_ref()))?;
 
-{desc}
-
-```lua
-{parent_name}.{name}({arg_names})
-```
-
-"#
-		)?;
-		Ok(())
-	}
-
-}
-
-impl<P> Writable<P> for Pkg<Method> where Pkg<P>: Writable {
-	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&Pkg<P>>) -> io::Result<()> {
-		let name = self.name.as_ref();
-		let name_lower = name.to_lowercase();
-		let desc = match self.description.as_ref() {
-			Some(s) => s.as_ref(),
-			None => ""
+		// This will be equal to the trimmed name of the class prefixed with the word `my`.
+		let object_name = {
+			let mut trimmed = trimmed_cls_name!(parent.unwrap().name.as_ref()).to_string();
+			let mut new_prefix = String::with_capacity(3);
+			new_prefix.push_str("my");
+			// make sure the first letter of the class name is uppercase
+			new_prefix.push_str(&trimmed[0..1].to_ascii_uppercase());
+			trimmed.replace_range(0..1, &new_prefix);
+			trimmed
 		};
-		let Some(parent) = parent else {panic!("Error: Parent must be provided!")};
-		let parent_name = parent.name.as_ref();
-		let arg_names: String = self.ty.args.iter()
-			.map(|a| a.name.as_ref().unwrap().as_ref())
-			.collect::<Vec<_>>()
-			.join(", ");
-
-		write!(w, 
-r#"
-### `{name}`
-<div class="search_terms" style="display: none">{name_lower}</div>
-
-{desc}
-
-```lua
-{parent_name}:{name}({arg_names})
-```
-
-"#
+		
+		write!(w, "\n{desc}\n\
+			\n\
+			```lua\n\
+			{object_name}:{name}({arg_names})\n\
+			```\n\
+			\n"
 		)?;
+
+		if self.args.len() > 0 {
+			w.write(b"**Parameters**:\n\n")?;
+
+			for param in self.args.iter() {
+				write_param(w, param, 0)?;
+			}
+		}
+		if self.rets.len() > 0 {
+			w.write(b"**Returns**:\n\n")?;
+
+			for param in self.rets.iter() {
+				write_param(w, param, 0)?;
+			}
+		}
 		Ok(())
 	}
 

@@ -1,22 +1,33 @@
-use std::path::Path;
 
 use derive_more::{From, TryInto};
-use log::debug;
+// use log::debug;
 
-use crate::{error::Error, lex::{self, Lit}, FromTokens, ParseErr};
+use crate::lex::Lit;
+
+
+#[derive(Debug, Clone)]
+pub struct Example {
+	pub path: Box<str>,
+	pub title: Option<Box<str>>,
+	pub description: Option<Box<str>>,
+}
+
 
 
 // =============================================================================
 // PACKAGE
 // =============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[repr(C)]
-pub struct Pkg<T> {
+pub struct PkgCore {
 	/// Name of the package.
 	/// This is set after parsing.
 	/// It always originates from the filename.
 	pub name: Box<str>,
+	/// The namespace the file was in. This will be the result of concatenating the parent directories,
+	/// using `.` as a seperator.
+	pub namespace: Box<str>,
 	/// Description of the package.
 	pub description: Option<Box<str>>,
 	/// Is this part of the experimental API? Default: `false`.
@@ -32,80 +43,45 @@ pub struct Pkg<T> {
 
 	///A table containing the examples. Keys are the example's name/path to the example file.
 	pub examples:  Option<Vec<Example>>,
-
-	pub ty: T,
-
 }
-
-
-
-#[derive(Debug, Clone)]
-pub struct Example {
-	pub path: Box<str>,
-	pub title: Option<Box<str>>,
-	pub description: Option<Box<str>>,
-}
-
 
 
 #[derive(Debug, From, TryInto)]
 #[repr(C, u8)]
 pub enum EPkg {
-	Class(Pkg<Class>),
-	Function(Pkg<Function>),
-	Method(Pkg<Method>),
-	Value(Pkg<Value>),
-	Lib(Pkg<Lib>),
-	Event(Pkg<Event>),
-	Operator(Pkg<Operator>)
+	Class(ClassPkg),
+	Function(FunctionPkg),
+	Method(MethodPkg),
+	Value(ValuePkg),
+	Lib(LibPkg),
+	Event(EventPkg),
+	Operator(OperatorPkg)
 }
+
+
+
 
 
 impl EPkg {
 
-	/// Gets a `mut ptr` to the first field of each variant
+	/// Gets a `mut ptr` to the `core` of each variant.
+	/// This is done in a branchless manner.
 	#[inline(always)]
-	unsafe fn mut_ptr(&mut self) -> *mut Box<str> {
+	pub fn core_mut(&mut self) -> &mut PkgCore {
+		// Safety: All variants have `repr(C)` and have `PkgCore` as their first field.
 		// Add `8` to skip past the tag
-		unsafe { (self as *mut EPkg as *mut Box<str>).byte_add(8) }
-	}
-	/// Gets a `const ptr` to the first field of each variant
-	#[inline(always)]
-	unsafe fn ptr(&self) -> *const Box<str> {
-		// Add `8` to skip past the tag
-		unsafe { (self as *const EPkg as *const Box<str>).byte_add(8) }
+		unsafe { &mut *(self as *mut EPkg as *mut PkgCore).byte_add(8) }
 	}
 
-	pub fn set_name(&mut self, new_name: Box<str>) {
-		// match self {
-		// 	EPkg::Class(pkg) => pkg.name = new_name,
-		// 	EPkg::Function(pkg) => pkg.name = new_name,
-		// 	EPkg::Method(pkg) => pkg.name = new_name,
-		// 	EPkg::Value(pkg) => pkg.name = new_name,
-		// 	EPkg::Lib(pkg) => pkg.name = new_name,
-		// 	EPkg::Event(pkg) => pkg.name = new_name,
-		// 	EPkg::Operator(pkg) => pkg.name = new_name,
-		// }
-		debug!("self = {self:?}\n\n\n");
-		unsafe {
-			*self.mut_ptr() = new_name;
-		}
-		debug!("updated name... = {self:?}\n\n\n");
+	/// Gets a `const ptr` to the `core` of each variant.
+	/// This is done in a branchless manner.
+	#[inline(always)]
+	pub fn core(&self) -> &PkgCore {
+		// Safety: All variants have `repr(C)` and have `PkgCore` as their first field.
+		// Add `8` to skip past the tag
+		unsafe { &*(self as *const EPkg as *const PkgCore).byte_add(8) }
 	}
-	pub fn name(&self) -> &str {
-		// match self {
-		// 	EPkg::Class(pkg) => &pkg.name,
-		// 	EPkg::Function(pkg) => &pkg.name,
-		// 	EPkg::Method(pkg) => &pkg.name,
-		// 	EPkg::Value(pkg) => &pkg.name,
-		// 	EPkg::Lib(pkg) => &pkg.name,
-		// 	EPkg::Event(pkg) => &pkg.name,
-		// 	EPkg::Operator(pkg) => &pkg.name,
-		// }
-		unsafe {
-			(*self.ptr()).as_str()
-		}
-	}
+
 }
 
 
@@ -127,15 +103,69 @@ pub struct FnArg {
 }
 
 #[derive(Debug)]
-pub struct Function {
+#[repr(C)]
+pub struct FunctionPkg {
+	pub core: PkgCore,
 	pub args: Vec<FnArg>,
 	pub rets: Vec<FnArg>,
 }
+impl FunctionPkg {
+	pub fn stemmed_name(&self) -> &str {
+		self.core.name.as_str()
+			.trim_start_matches("get") 
+			.trim_start_matches("set") 
+			.trim_start_matches("mod")
+			.trim_start_matches("is") 
+			.trim_start_matches("has") 
+			.trim_start_matches("can")
+			.trim_start_matches("open") 
+			.trim_start_matches("close")
+			.trim_start_matches("add") 
+			.trim_start_matches("remove")
+			.trim_start_matches("enable") 
+			.trim_start_matches("disable")
+			.trim_start_matches("apply") 
+			.trim_start_matches("update")
+			.trim_start_matches("find") 
+			.trim_start_matches("show")
+			.trim_start_matches("create") 
+			.trim_start_matches("delete")
+			.trim_start_matches("test") 
+			.trim_start_matches("toggle")
+	}
+}
 
 #[derive(Debug)]
-pub struct Method {
+#[repr(C)]
+pub struct MethodPkg {
+	pub core: PkgCore,
 	pub args: Vec<FnArg>,
 	pub rets: Vec<FnArg>,
+}
+impl MethodPkg {
+	pub fn stemmed_name(&self) -> &str {
+		self.core.name.as_str()
+			.trim_start_matches("get") 
+			.trim_start_matches("set") 
+			.trim_start_matches("mod")
+			.trim_start_matches("is") 
+			.trim_start_matches("has") 
+			.trim_start_matches("can")
+			.trim_start_matches("open") 
+			.trim_start_matches("close")
+			.trim_start_matches("add") 
+			.trim_start_matches("remove")
+			.trim_start_matches("enable") 
+			.trim_start_matches("disable")
+			.trim_start_matches("apply") 
+			.trim_start_matches("update")
+			.trim_start_matches("find") 
+			.trim_start_matches("show")
+			.trim_start_matches("create") 
+			.trim_start_matches("delete")
+			.trim_start_matches("test") 
+			.trim_start_matches("toggle")
+	}
 }
 
 // =============================================================================
@@ -143,16 +173,27 @@ pub struct Method {
 // =============================================================================
 
 #[derive(Debug, Default)]
-pub struct Class {
+#[repr(C)]
+pub struct ClassPkg {
+	pub core: PkgCore,
 	/// The type from which this type inherits should be passed here. This will allow the documentation builders to build the proper inheritance chains. For example, when a function accepts tes3mobileActor, because tes3mobileNPC, tes3mobileCreature, and tes3mobilePlayer have inherits = "tes3mobileActor", the docs will be built with tes3mobileNPC, tes3mobileCreature, and tes3mobilePlayer parameters for that function automatically. This saves you the job of figuring out the complete inheritance chains.
 	pub inherits: Option<Box<str>>,
 	/// This is a flag for types that can't be accessed normally. There are some types which inherit from abstract ones.
 	pub is_abstract: bool, 
 	/// The value packages used by this class.
-	pub values: Vec<Pkg<Value>>,
+	pub values: Vec<ValuePkg>,
 
-	pub functions: Vec<Pkg<Function>>,
-	pub methods: Vec<Pkg<Method>>,
+	pub functions: Vec<FunctionPkg>,
+	pub methods: Vec<MethodPkg>,
+}
+
+impl ClassPkg {
+	pub fn stemmed_name(&self) -> &str {
+		self.core.name.as_str()
+			.trim_start_matches("ni")
+			.trim_start_matches("tes3ui")
+			.trim_start_matches("tes3")
+	}
 }
 
 // =============================================================================
@@ -160,7 +201,9 @@ pub struct Class {
 // =============================================================================
 
 #[derive(Debug)]
-pub struct Value{
+#[repr(C)]
+pub struct ValuePkg {
+	pub core: PkgCore,
 	/// Is this read only?
 	pub read_only: bool,
 	/// The value type
@@ -169,7 +212,9 @@ pub struct Value{
 	pub default: Option<Lit>,
 }
 #[derive(Debug)]
-pub struct Operator {
+#[repr(C)]
+pub struct OperatorPkg {
+	pub core: PkgCore,
 	pub overloads: Vec<Overload>
 }
 
@@ -191,11 +236,13 @@ pub struct Overload {
 // =============================================================================
 
 #[derive(Debug)]
-pub struct Lib {
+#[repr(C)]
+pub struct LibPkg {
+	pub core: PkgCore,
 	/// External link
 	pub link: Option<Box<str>>,
 	///For libraries with sub-namespaces such as mwse.mcm, etc., this array contians the nested namespaces.
-	pub sublibs: Option<Vec<Pkg<Lib>>>,
+	pub sublibs: Option<Vec<LibPkg>>,
 	// pub rets: Vec<FnArg>,
 }
 
@@ -226,7 +273,9 @@ pub struct EventLink {
 
 
 #[derive(Debug)]
-pub struct Event {
+#[repr(C)]
+pub struct EventPkg {
+	pub core: PkgCore,
 	/// Filter for this event
 	pub filter: Option<Box<str>>,
 	/// Is this event blockable?

@@ -23,7 +23,7 @@ use derive_more::{Display, From};
 use error::Error;
 use lex::LexError;
 use log::{debug, error, info, trace, warn};
-use package::{Class, EPkg, Lib};
+use package::{ClassPkg, EPkg, EventPkg, FunctionPkg, LibPkg, MethodPkg, OperatorPkg, PkgCore, ValuePkg};
 pub use parse::*;
 use writer::Writable;
 
@@ -42,81 +42,178 @@ enum MainError {
 // 	packages: Vec<Package>,
 // }
 
-pub struct DirTokens {
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct DirPackages {
+	classes: Vec<ClassPkg>,
+	functions: Vec<FunctionPkg>,
+	methods: Vec<MethodPkg>,
+	values: Vec<ValuePkg>,
+	libs: Vec<LibPkg>,
+	events: Vec<EventPkg>,
+	operators: Vec<OperatorPkg>,
 }
 
-fn process_str(contents: String, path: &Path) -> Result<bool, Error> {
-	let mut iter = match lex::TokenIter::from_input(&contents) {
-		Ok(t) => t,
-		Err(e) => {
-			let path = path;
-			warn!("Could not lex {path:?}\n\tError: {e}");
-			return Ok(false)
+impl DirPackages {
+	fn add_pkg(&mut self, epkg: EPkg) {
+		// TODO: can this be done in a branchless manner?
+		match epkg {
+			EPkg::Class(pkg) => self.classes.push(pkg),
+			EPkg::Function(pkg) => self.functions.push(pkg),
+			EPkg::Method(pkg) => self.methods.push(pkg),
+			EPkg::Value(pkg) => self.values.push(pkg),
+			EPkg::Lib(pkg) => self.libs.push(pkg),
+			EPkg::Event(pkg) => self.events.push(pkg),
+			EPkg::Operator(pkg) => self.operators.push(pkg),
 		}
-	};
-	debug!("Got tokens {:?}", iter.as_slice());
-	// let mut iter = tokens.iter().peekable();
-	match EPkg::from_tokens(&mut iter) {
-		Err(ParseErr::BadPkgTy(ty)) => {
-			warn!("Got a package with an invalid type!\n\t\
-				path: {path:?}\n\t\
-				type: {ty}");
-				Ok(false)
-		},
-		Err(e) => {
-			// println!("Error encountered when processing {path:?}:\n\t{e:?}");
-			do yeet format!("Error encountered when processing {path:?}:\n\t{e:?}");
-		},
-		Ok(_) => {
-			// println!("succesfully processed {entry:?}")
-			Ok(true)
-		}
+		// unsafe {
+		// 	// let ptr = self as *mut _;
+		// 	// ptr.write_bytes(val, count);
+		// 	// ptr.write(val);
+		// 	let vec = &mut self.classes;
+		// 	if vec.capacity() == vec.len() {
+		// 		vec.reserve(1);
+		// 	}
+		// 	std::mem::cop
+		// 	vec.len
 
-		
+		// }
+	}
+	fn extend(&mut self, other: DirPackages) {
+		self.classes.extend(other.classes);
+		self.functions.extend(other.functions);
+		self.methods.extend(other.methods);
+		self.values.extend(other.values);
+		self.libs.extend(other.libs);
+		self.events.extend(other.events);
+		self.operators.extend(other.operators);
+	}
+
+	fn total_len(&self) -> usize {
+		  self.classes.len() 
+		+ self.functions.len() 
+		+ self.methods.len() 
+		+ self.values.len() 
+		+ self.libs.len() 
+		+ self.events.len() 
+		+ self.operators.len() 
 	}
 }
 
-fn process(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<usize, Error>>>> {
+
+fn process(dir: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Result<DirPackages, Error>>>> {
 	Box::pin(async move {
-	trace!("processing {dir:?}");
-	let mut stream = tokio::fs::read_dir(dir).await?;
-	let mut num_read = 0;
+		trace!("processing {dir:?}");
+		let mut stream = tokio::fs::read_dir(dir).await?;
+		let mut pkgs = DirPackages::default();
+		let mut dir_handles = Vec::new();
 
-	while let Some(entry) = stream.next_entry().await? {
-		// dbg!(entry);
-		// if entry.
-		info!("processing {entry:?}");
-		let ft = entry.file_type().await?;
-		if ft.is_file() {
-			let path = entry.path();
-			let contents = tokio::fs::read_to_string(&path).await?;
-			match process_str(contents, &path) {
-				Ok(true) => num_read += 1,
-				Ok(false) => (),
-				Err(e) => {
-					// info!("parsed {num_read} files without error.... :(");
-					do yeet e;
-				}
-			}
-		} else if ft.is_dir() {
-			match process(entry.path()).await {
-				Ok(num) => num_read += num,
-				Err(e) => {
-					info!("parsed {num_read} files without error.... :(");
-					do yeet e;
-				}
+		let mut file_handles = Vec::new();
+		// let mut filepaths = Vec::new();
+		while let Some(entry) = stream.next_entry().await? {
+			// dbg!(entry);
+			// if entry.
+			// info!("processing {entry:?}");
+			let ft = entry.file_type().await?;
+			if ft.is_file() {
+				// filepaths.push(entry.path());
+				file_handles.push(tokio::spawn(async move {
+					let path = entry.path();
+					// let epkg = EPkg::parse_from_file(&path).await;
+					// (epkg, path)
+					// (&path, EPkg::parse_from_file(&path).await)
+					match EPkg::parse_from_file(&path).await {
+						Ok(epkg) => return Some(epkg),
+						// Ok(epkg) => pkgs.add_pkg(epkg),
+						Err(Error::Lex(l)) => warn!("File {path:?} had could not be lexed: {l:?}"),
+						Err(e) => error!("Could not parse file {path:?}: {e:?}")
+					}
+					None
+				}));
+				// pkgs.add_pkg(EPkg::parse_from_file(&entry.path()).await?);
+			} else if ft.is_dir() {
+				dir_handles.push(tokio::spawn(process(entry.path())));
+				// pkgs.extend(process(entry.path()).await?);
 			}
 		}
-	}
-	// println!("read {num_read} files");
-	return Ok(num_read);
-})
+		// for path in filepaths {
+		// 	match EPkg::parse_from_file(&path).await {
+		// 		Ok(epkg) => pkgs.add_pkg(epkg),
+		// 		Err(Error::Lex(l)) => warn!("File {path:?} had could not be lexed: {l:?}"),
+		// 		Err(e) => error!("Could not parse file {path:?}: {e:?}")
+		// 	}
+		// }
+		for file_handle in file_handles {
+			if let Some(epkg) = file_handle.await? {
+				pkgs.add_pkg(epkg);
+			}
+			// match file_handle.await? {
+			// 	// Ok(epkg) => Ok(epkg),
+			// 	(Ok(epkg), _) => pkgs.add_pkg(epkg),
+			// 	(Err(Error::Lex(l)), path)=> warn!("File {path:?} had could not be lexed: {l:?}"),
+			// 	(Err(e), path) => error!("Could not parse file {path:?}: {e:?}")
+			// }
+			// match EPkg::parse_from_file(&path).await {
+			// 	Ok(epkg) => pkgs.add_pkg(epkg),
+			// 	Err(Error::Lex(l)) => warn!("File {path:?} had could not be lexed: {l:?}"),
+			// 	Err(e) => error!("Could not parse file {path:?}: {e:?}")
+			// }
+		}
+
+		for handle in dir_handles {
+			pkgs.extend(handle.await??);
+		}
+		// println!("read {num_read} files");
+		return Ok(pkgs);
+	})
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-	// use log;
-	env_logger::init();
+pub struct DocPackages {
+	pub types: DirPackages,
+	pub globals: DirPackages,
+	pub events: DirPackages,
+}
+
+impl DocPackages {
+	pub async fn new() -> Result<DocPackages, Error> {
+		
+		let types;
+		let globals;
+		let events;
+		// initialize the above variables using threads
+		{
+
+			let types_handle = tokio::spawn(process(PathBuf::from("docs/namedTypes")));
+			let globals_handle = tokio::spawn(process(PathBuf::from("docs/global")));
+			let events_handle = tokio::spawn(process(PathBuf::from("docs/events")));
+
+			// named_types.
+			match types_handle.await? {
+				Ok(num) => types = num,
+				Err(e) => panic!("{e:?}"),
+			}
+			match globals_handle.await? {
+				Ok(num) => globals = num,
+				Err(e) => panic!("{e:?}"),
+			}
+			
+			match events_handle.await? {
+				Ok(num) => events = num,
+				Err(e) => panic!("{e:?}"),
+			}
+		}
+
+		Ok(Self{ types, globals, events })
+	}
+}
+
+
+async fn oldmain() -> Result<(), Error> {
+
+
+	// dbg!(size_of::<EPkg>());
+	// dbg!(size_of::<PkgCore>());
+	// return Ok(());
 	// env_logger::builder().filter_level(log::LevelFilter::Debug)
 	// let input = r#"abc = { hi "this is a literal string}"#;
 	// let input = include_str!("../docs/namedTypes/mwseMCMSlider/convertToLabelValue.lua");
@@ -135,8 +232,10 @@ async fn main() -> Result<(), Error> {
 	// let mut read_dir = std::fs::read_dir("docs/namedTypes/mgeCameraConfig")?;
 	// let path = PathBuf::from("docs/globals/math.lua");
 	// let mut read_dir = std::fs::read_dir("docs/global/math")?;
-	let path = PathBuf::from("docs/namedTypes/mwseLogger.lua");
-	let mut read_dir = std::fs::read_dir("docs/namedTypes/mwseLogger")?;
+	// let path = PathBuf::from("docs/namedTypes/mwseLogger.lua");
+	// let mut read_dir = std::fs::read_dir("docs/namedTypes/mwseLogger")?;
+	let path = PathBuf::from("docs/namedTypes/tes3mobilePlayer.lua");
+	let mut read_dir = std::fs::read_dir("docs/namedTypes/tes3mobilePlayer")?;
 
 	let epkg = EPkg::parse_from_file(&path).await?;
 	debug!("got epkg: {epkg:?}");
@@ -146,38 +245,54 @@ async fn main() -> Result<(), Error> {
 	let mut values = Vec::new();
 	let mut functions = Vec::new();
 	let mut methods = Vec::new();
-	while let Some(entry) = read_dir.next() {
-		let entry = entry?;
-		// let parent_name = Some(cls_pkg.name.clone());
+	
+	for path in read_dir {
+		if path.is_err() {
+			warn!("entry is error! entry: {:?}", path);
+		}
+		let entry = path?;
+		debug!("processing entry: {:?}", entry.path());
+		// let parent_name = Some(cls_pkg.core.name.clone());
 		match EPkg::parse_from_file(&entry.path()).await {
 			Ok(EPkg::Value(pkg)) => values.push(pkg),
 			Ok(EPkg::Function(pkg)) => functions.push(pkg),
 			Ok(EPkg::Method(pkg)) => methods.push(pkg),
-
-			_ => (),
+			t => warn!("got something unexpected: {t:?}"),
+			// _ => (),
 		}
 	}
-	values.sort_by(|a, b| a.name.cmp(&b.name));
-	functions.sort_by(|a, b| a.name.cmp(&b.name));
-	methods.sort_by(|a, b| a.name.cmp(&b.name));
+	values.sort_by(|a, b| a.core.name.cmp(&b.core.name));
+	functions.sort_by(|a, b| a.core.name.cmp(&b.core.name));
+	methods.sort_by(|a, b| a.core.name.cmp(&b.core.name));
 
-	cls_pkg.ty.values = values;
-	cls_pkg.ty.functions = functions;
-	cls_pkg.ty.methods = methods;
+	cls_pkg.values = values;
+	cls_pkg.functions = functions;
+	cls_pkg.methods = methods;
 
-	info!("got {cls_pkg:?}");
+	// info!("got {cls_pkg:?}");
+	// dbg!(&cls_pkg);
 
 	let mut writer = std::fs::File::create("output.md")?;
 	cls_pkg.write_mkdocs(&mut writer, None)?;
-	return Ok(());
+	// return Ok(());
 
+
+	Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+	// use log;
+	env_logger::init();
 
 
 	use std::time::Instant;
     let now = Instant::now();
 
+	let pkg_tys;
+	let pkg_globals;
+	let pkg_events;
     // Code block to measure.
-	let mut total = 0_usize;
     {
 
 		let named_types = tokio::spawn(process(PathBuf::from("docs/namedTypes")));
@@ -186,21 +301,21 @@ async fn main() -> Result<(), Error> {
 
 		// named_types.
 		match named_types.await? {
-			Ok(num) => total += num,
+			Ok(num) => pkg_tys = num,
 			Err(e) => panic!("{e:?}"),
 		}
 		match globals.await? {
-			Ok(num) => total += num,
+			Ok(num) => pkg_globals = num,
 			Err(e) => panic!("{e:?}"),
 		}
 		
 		match events.await? {
-			Ok(num) => total += num,
+			Ok(num) => pkg_events = num,
 			Err(e) => panic!("{e:?}"),
 		}
 	}
 	let elapsed = now.elapsed();
-	
+	let total = pkg_events.total_len() + pkg_tys.total_len() + pkg_globals.total_len();
 	println!("Processed {total} files in {elapsed:.2?}.");
 	// let tokens = lex::get_tokens(input);
 

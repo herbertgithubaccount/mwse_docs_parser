@@ -3,7 +3,7 @@ use std::path::Path;
 
 use log::{debug, log_enabled, trace};
 
-use crate::{error::Error, lex::{self, Kw, Lit, Punc, Token, TokenIter}, package::{Class, EPkg, Event, EventDatum, EventLink, Example, FnArg, Function, Lib, Method, Operator, Overload, Pkg, Value}};
+use crate::{error::Error, lex::{self, Kw, Lit, Punc, Token, TokenIter}, package::{ClassPkg, EPkg, EventDatum, EventLink, EventPkg, Example, FnArg, FunctionPkg, LibPkg, MethodPkg, OperatorPkg, Overload, PkgCore, ValuePkg}};
 use derive_more::Debug;
 
 
@@ -613,11 +613,7 @@ impl FromTokens for EPkg {
 
 			
 		// Core values
-		let mut name: Box<str> = Default::default();
-		let mut description: Option<Box<str>> = Default::default();
-		let mut experimental: bool = Default::default();
-		let mut deprecated: bool = Default::default();
-		let mut examples:  Option<Vec<Example>> = Default::default();
+		let mut core = PkgCore::default();
 
 
 		// The value type string. Used to make sure we parsed the file correctly.
@@ -685,7 +681,7 @@ impl FromTokens for EPkg {
 						},
 						
 						Kw::Examples => {
-							examples = Some(Vec::<Example>::from_tokens(iter)?);
+							core.examples = Some(Vec::<Example>::from_tokens(iter)?);
 						},
 						Kw::EventData => {
 							event_data = Vec::<EventDatum>::from_tokens(iter)?;
@@ -700,7 +696,7 @@ impl FromTokens for EPkg {
 						}
 						Kw::Description => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => description = Some(s),
+								Some(Token::Lit(Lit::Str(s))) => core.description = Some(s),
 								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Description)
 							}
 						},
@@ -743,14 +739,14 @@ impl FromTokens for EPkg {
 
 						Kw::Deprecated => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => deprecated = b,
+								Some(Token::Lit(Lit::Bool(b))) => core.deprecated = b,
 								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Deprecated)
 							}
 						},
 						
 						Kw::Experimental => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => experimental = b,
+								Some(Token::Lit(Lit::Bool(b))) => core.experimental = b,
 								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Experimental)
 							}
 						},
@@ -834,7 +830,7 @@ impl FromTokens for EPkg {
 
 		// Handle `value` here to avoid a clone later
 		if file_type_str.as_ref() == "value" {
-			return Ok(EPkg::Value(Pkg{name, description, experimental, deprecated, examples, ty: Value{ty: valuetype, default, read_only}}));
+			return Ok(EPkg::Value(ValuePkg{core, ty: valuetype, default, read_only}));
 		}
 		if valuetype.is_some() {
 			if rets.len() == 0 {
@@ -848,12 +844,12 @@ impl FromTokens for EPkg {
 		debug!("returning packagetype {file_type_str}");
 		// TODO: trigger error if value does not match parsed parameters
 		match file_type_str.as_ref() {
-			"class" => Ok(EPkg::Class(Pkg{name, description, experimental, deprecated, examples, ty:Class{inherits, ..Default::default()}})),
-			"function" => Ok(EPkg::Function(Pkg{name, description, experimental, deprecated, examples, ty:Function{args, rets}})),
-			"method" => Ok(EPkg::Method(Pkg{name, description, experimental, deprecated, examples, ty:Method{args, rets}})),
-			"lib" => Ok(EPkg::Lib(Pkg{name, description, experimental, deprecated, examples, ty:Lib{link, sublibs: None}})),
-			"event" => Ok(EPkg::Event(Pkg{name, description, experimental, deprecated, examples, ty:Event{filter, blockable, event_data, links, related}})),
-			"operator" => Ok(EPkg::Operator(Pkg{name, description, experimental, deprecated, examples, ty:Operator{overloads}})),
+			"class" => Ok(EPkg::Class(ClassPkg{core, inherits, ..Default::default()})),
+			"function" => Ok(EPkg::Function(FunctionPkg{core, args, rets})),
+			"method" => Ok(EPkg::Method(MethodPkg{core, args, rets})),
+			"lib" => Ok(EPkg::Lib(LibPkg{core, link, sublibs: None})),
+			"event" => Ok(EPkg::Event(EventPkg{core, filter, blockable, event_data, links, related})),
+			"operator" => Ok(EPkg::Operator(OperatorPkg{core, overloads})),
 			_ => do yeet ParseErr::BadPkgTy(file_type_str)
 			// _ => do yeet ParseErr{token}
 		}
@@ -893,23 +889,25 @@ impl EPkg {
 
 		// let core = epkg.core_mut();
 		// core.parent = parent_name;
-		let mut filename = path.file_name()
-								 .expect("Invalid filename!")
-								 .to_str()
-								 .expect("Invalid filename!");
+		let mut filename = path.file_name().unwrap().to_str().unwrap();
+
+		let parts: Vec<&str> = path.components()
+			.map(|c| c.as_os_str().to_str().unwrap())
+			.collect();
+
+		let namespace = if parts.len() >= 3 {
+			parts[2..parts.len() - 1].join(".").into_boxed_str()
+		} else {
+			Box::from("")
+		};
+
 		if filename.ends_with(".lua") {
 			filename = &filename[..filename.len()-4];
 		}
+		let core = epkg.core_mut();
+		core.namespace = namespace;
+		core.name = Box::from(filename);
 
-		epkg.set_name(Box::from(filename));
-
-		unsafe {
-			let ptr = (&mut epkg as *mut EPkg);
-			dbg!(ptr);
-			let ptr = (&mut epkg as *mut EPkg as *mut Box<str>).byte_add(8);
-			dbg!(ptr);
-			dbg!(unsafe { (*ptr).as_ref()});
-		}
 		
 		Ok(epkg)
 	}
