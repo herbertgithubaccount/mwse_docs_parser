@@ -6,6 +6,9 @@
 #![feature(yeet_expr)]
 #![feature(try_trait_v2_yeet)]
 #![feature(type_alias_impl_trait)]
+#![feature(ptr_as_ref_unchecked)]
+#![feature(never_type)]
+#![feature(str_as_str)]
 
 mod lex;
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
@@ -20,7 +23,7 @@ use derive_more::{Display, From};
 use error::Error;
 use lex::LexError;
 use log::{debug, error, info, trace, warn};
-use package::{ClassPkg, EPkg, LibPackage};
+use package::{Class, EPkg, Lib};
 pub use parse::*;
 use writer::Writable;
 
@@ -135,7 +138,8 @@ async fn main() -> Result<(), Error> {
 	let path = PathBuf::from("docs/namedTypes/mwseLogger.lua");
 	let mut read_dir = std::fs::read_dir("docs/namedTypes/mwseLogger")?;
 
-	let epkg = EPkg::parse_from_file(&path, None).await?;
+	let epkg = EPkg::parse_from_file(&path).await?;
+	debug!("got epkg: {epkg:?}");
 	let EPkg::Class(mut cls_pkg) = epkg else {panic!()};
 
 
@@ -144,8 +148,8 @@ async fn main() -> Result<(), Error> {
 	let mut methods = Vec::new();
 	while let Some(entry) = read_dir.next() {
 		let entry = entry?;
-		let parent_name = Some(cls_pkg.core.name.clone());
-		match EPkg::parse_from_file(&entry.path(), parent_name).await {
+		// let parent_name = Some(cls_pkg.name.clone());
+		match EPkg::parse_from_file(&entry.path()).await {
 			Ok(EPkg::Value(pkg)) => values.push(pkg),
 			Ok(EPkg::Function(pkg)) => functions.push(pkg),
 			Ok(EPkg::Method(pkg)) => methods.push(pkg),
@@ -153,18 +157,18 @@ async fn main() -> Result<(), Error> {
 			_ => (),
 		}
 	}
-	values.sort_by(|a, b| a.core.name.cmp(&b.core.name));
-	functions.sort_by(|a, b| a.core.name.cmp(&b.core.name));
-	methods.sort_by(|a, b| a.core.name.cmp(&b.core.name));
+	values.sort_by(|a, b| a.name.cmp(&b.name));
+	functions.sort_by(|a, b| a.name.cmp(&b.name));
+	methods.sort_by(|a, b| a.name.cmp(&b.name));
 
-	cls_pkg.values = values;
-	cls_pkg.functions = functions;
-	cls_pkg.methods = methods;
+	cls_pkg.ty.values = values;
+	cls_pkg.ty.functions = functions;
+	cls_pkg.ty.methods = methods;
 
 	info!("got {cls_pkg:?}");
 
 	let mut writer = std::fs::File::create("output.md")?;
-	cls_pkg.write_mkdocs(&mut writer, None::<&ClassPkg>)?;
+	cls_pkg.write_mkdocs(&mut writer, None)?;
 	return Ok(());
 
 

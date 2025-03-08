@@ -3,7 +3,7 @@ use std::path::Path;
 
 use log::{debug, log_enabled, trace};
 
-use crate::{error::Error, lex::{self, Kw, Lit, Punc, Token, TokenIter}, package::{ClassPkg, EPkg, EventDatum, EventLink, EventPackage, Example, FnArg, FnPkg, LibPackage, MethodPkg, Overload, PackageOperator, PkgCore, ValuePkg}};
+use crate::{error::Error, lex::{self, Kw, Lit, Punc, Token, TokenIter}, package::{Class, EPkg, Event, EventDatum, EventLink, Example, FnArg, Function, Lib, Method, Operator, Overload, Pkg, Value}};
 use derive_more::Debug;
 
 
@@ -611,8 +611,15 @@ impl FromTokens for Vec<EventLink> {
 impl FromTokens for EPkg {
 	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
 
-		let mut core = PkgCore::default();
 			
+		// Core values
+		let mut name: Box<str> = Default::default();
+		let mut description: Option<Box<str>> = Default::default();
+		let mut experimental: bool = Default::default();
+		let mut deprecated: bool = Default::default();
+		let mut examples:  Option<Vec<Example>> = Default::default();
+
+
 		// The value type string. Used to make sure we parsed the file correctly.
 		let mut file_type_str: Option<Box<str>> = None;
 
@@ -630,6 +637,7 @@ impl FromTokens for EPkg {
 
 		// class specific
 		let mut inherits = None;
+		let mut is_abstract = false;
 
 		// value specific
 		let mut read_only = false;
@@ -677,7 +685,7 @@ impl FromTokens for EPkg {
 						},
 						
 						Kw::Examples => {
-							core.examples = Some(Vec::<Example>::from_tokens(iter)?);
+							examples = Some(Vec::<Example>::from_tokens(iter)?);
 						},
 						Kw::EventData => {
 							event_data = Vec::<EventDatum>::from_tokens(iter)?;
@@ -692,7 +700,7 @@ impl FromTokens for EPkg {
 						}
 						Kw::Description => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => core.description = Some(s),
+								Some(Token::Lit(Lit::Str(s))) => description = Some(s),
 								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Description)
 							}
 						},
@@ -722,7 +730,7 @@ impl FromTokens for EPkg {
 
 						Kw::IsAbstract => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => core.is_abstract = b,
+								Some(Token::Lit(Lit::Bool(b))) => is_abstract = b,
 								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::IsAbstract)
 							}
 						},
@@ -735,14 +743,14 @@ impl FromTokens for EPkg {
 
 						Kw::Deprecated => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => core.deprecated = b,
+								Some(Token::Lit(Lit::Bool(b))) => deprecated = b,
 								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Deprecated)
 							}
 						},
 						
 						Kw::Experimental => {
 							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => core.experimental = b,
+								Some(Token::Lit(Lit::Bool(b))) => experimental = b,
 								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Experimental)
 							}
 						},
@@ -826,7 +834,7 @@ impl FromTokens for EPkg {
 
 		// Handle `value` here to avoid a clone later
 		if file_type_str.as_ref() == "value" {
-			return Ok(EPkg::Value(ValuePkg{core, read_only, ty: valuetype, default}));
+			return Ok(EPkg::Value(Pkg{name, description, experimental, deprecated, examples, ty: Value{ty: valuetype, default, read_only}}));
 		}
 		if valuetype.is_some() {
 			if rets.len() == 0 {
@@ -840,12 +848,12 @@ impl FromTokens for EPkg {
 		debug!("returning packagetype {file_type_str}");
 		// TODO: trigger error if value does not match parsed parameters
 		match file_type_str.as_ref() {
-			"class" => Ok(EPkg::Class(ClassPkg{core, inherits, ..Default::default()})),
-			"function" => Ok(EPkg::Function(FnPkg{core, args, rets})),
-			"method" => Ok(EPkg::Method(MethodPkg{core, args, rets})),
-			"lib" => Ok(EPkg::Lib(LibPackage{core, link, sublibs: None})),
-			"event" => Ok(EPkg::Event(EventPackage{core, filter, blockable, event_data, links, related})),
-			"operator" => Ok(EPkg::Operator(PackageOperator{core, overloads})),
+			"class" => Ok(EPkg::Class(Pkg{name, description, experimental, deprecated, examples, ty:Class{inherits, ..Default::default()}})),
+			"function" => Ok(EPkg::Function(Pkg{name, description, experimental, deprecated, examples, ty:Function{args, rets}})),
+			"method" => Ok(EPkg::Method(Pkg{name, description, experimental, deprecated, examples, ty:Method{args, rets}})),
+			"lib" => Ok(EPkg::Lib(Pkg{name, description, experimental, deprecated, examples, ty:Lib{link, sublibs: None}})),
+			"event" => Ok(EPkg::Event(Pkg{name, description, experimental, deprecated, examples, ty:Event{filter, blockable, event_data, links, related}})),
+			"operator" => Ok(EPkg::Operator(Pkg{name, description, experimental, deprecated, examples, ty:Operator{overloads}})),
 			_ => do yeet ParseErr::BadPkgTy(file_type_str)
 			// _ => do yeet ParseErr{token}
 		}
@@ -855,36 +863,36 @@ impl FromTokens for EPkg {
 
 
 impl EPkg {
-	pub fn core(&self) -> &PkgCore {
-		match self {
-			EPkg::Class(pkg) => &pkg.core,
-			EPkg::Function(pkg) => &pkg.core,
-			EPkg::Method(pkg) => &pkg.core,
-			EPkg::Value(pkg) => &pkg.core,
-			EPkg::Lib(pkg) => &pkg.core,
-			EPkg::Event(pkg) => &pkg.core,
-			EPkg::Operator(pkg) => &pkg.core,
-		}
-	}
-	pub fn core_mut(&mut self) -> &mut PkgCore {
-		match self {
-			EPkg::Class(pkg) => &mut pkg.core,
-			EPkg::Function(pkg) => &mut pkg.core,
-			EPkg::Method(pkg) => &mut pkg.core,
-			EPkg::Value(pkg) => &mut pkg.core,
-			EPkg::Lib(pkg) => &mut pkg.core,
-			EPkg::Event(pkg) => &mut pkg.core,
-			EPkg::Operator(pkg) => &mut pkg.core,
-		}
-	}
+	// pub fn core(&self) -> &PkgCore {
+	// 	match self {
+	// 		EPkg::Class(pkg) => &pkg.core,
+	// 		EPkg::Function(pkg) => &pkg.core,
+	// 		EPkg::Method(pkg) => &pkg.core,
+	// 		EPkg::Value(pkg) => &pkg.core,
+	// 		EPkg::Lib(pkg) => &pkg.core,
+	// 		EPkg::Event(pkg) => &pkg.core,
+	// 		EPkg::Operator(pkg) => &pkg.core,
+	// 	}
+	// }
+	// pub fn core_mut(&mut self) -> &mut PkgCore {
+	// 	match self {
+	// 		EPkg::Class(pkg) => &mut pkg.core,
+	// 		EPkg::Function(pkg) => &mut pkg.core,
+	// 		EPkg::Method(pkg) => &mut pkg.core,
+	// 		EPkg::Value(pkg) => &mut pkg.core,
+	// 		EPkg::Lib(pkg) => &mut pkg.core,
+	// 		EPkg::Event(pkg) => &mut pkg.core,
+	// 		EPkg::Operator(pkg) => &mut pkg.core,
+	// 	}
+	// }
 
-	pub async fn parse_from_file(path: &Path, parent_name: Option<Box<str>>) -> Result<Self, Error> {
+	pub async fn parse_from_file(path: &Path) -> Result<Self, Error> {
 		let input = tokio::fs::read_to_string(path).await?;
 		let mut iter = TokenIter::from_input(&input)?;
 		let mut epkg = EPkg::from_tokens(&mut iter)?;
 
-		let core = epkg.core_mut();
-		core.parent = parent_name;
+		// let core = epkg.core_mut();
+		// core.parent = parent_name;
 		let mut filename = path.file_name()
 								 .expect("Invalid filename!")
 								 .to_str()
@@ -893,8 +901,15 @@ impl EPkg {
 			filename = &filename[..filename.len()-4];
 		}
 
-		core.name = Box::from(filename);
+		epkg.set_name(Box::from(filename));
 
+		unsafe {
+			let ptr = (&mut epkg as *mut EPkg);
+			dbg!(ptr);
+			let ptr = (&mut epkg as *mut EPkg as *mut Box<str>).byte_add(8);
+			dbg!(ptr);
+			dbg!(unsafe { (*ptr).as_ref()});
+		}
 		
 		Ok(epkg)
 	}

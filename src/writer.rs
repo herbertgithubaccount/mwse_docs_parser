@@ -1,6 +1,7 @@
 
 use std::fmt;
-use crate::package::{ClassPkg, EPkg, FnPkg, MethodPkg, ValuePkg};
+use crate::package::{Class, EPkg, Function, Method, Pkg, Value};
+use crate::FromTokens;
 use std::io::Write;
 use std::io;
 
@@ -17,36 +18,46 @@ const LUA_COMMENT_HEADER: &'static [u8; 164] = br#"--[[
 "#;
 
 
-pub trait Writable {
+pub trait Writable<P = !> where Pkg<P>: Writable {
 	/// Write the mkdocs documentation
-	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()>;
-	/// Write the Emmy documentation
-	fn write_lua(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()> {
-		todo!("Figure out the lua thing")
-	}
+	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&Pkg<P>>) -> io::Result<()>;
+	// / Write the Emmy documentation
+	// fn write_lua(&self, w: &mut impl Write, parent: Option<&Pkg<PkgTy>>) -> io::Result<()> {
+	// 	todo!("Figure out the lua thing")
+	// }
 
 }
+impl Writable<!> for Pkg<!>{
+	fn write_mkdocs(&self, _w: &mut impl Write, _parent: Option<&Pkg<!>>) -> io::Result<()> {
+		unreachable!("Something must have gone seriously wrong to get here.")
+	}
+}
 
-
-fn write_sep(parent: Option<&impl Writable>, items: &[impl Writable], w: &mut impl Write) -> io::Result<()> {
-	if let Some(val) = items.first() {
-		val.write_mkdocs(w, parent)?;
-		for val in &items[1..] {
-			w.write(b"***\n")?;
+impl<P> Pkg<P> where Pkg<P>: Writable {
+	fn write_sep<C>(&self, items: &[Pkg<C>], w: &mut impl Write) -> io::Result<()> 
+	where Pkg<C>: Writable<P>
+	{
+		let parent = Some(self);
+		if let Some(val) = items.first() {
 			val.write_mkdocs(w, parent)?;
+			for val in &items[1..] {
+				w.write(b"***\n")?;
+				val.write_mkdocs(w, parent)?;
+			}
 		}
+		Ok(())
 	}
-	Ok(())
 }
 
 
 
-impl Writable for ClassPkg {
-	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()> {
+
+impl Writable for Pkg<Class> {
+	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&Pkg<!>>) -> io::Result<()> {
 		w.write(MKDOCS_COMMENT_HEADER)?;
-		let name = self.core.name.as_ref();
+		let name = self.name.as_ref();
 		let name_lower = name.to_lowercase();
-		let desc = match &self.core.description {
+		let desc = match &self.description {
 			Some(d) => d.as_ref(),
 			None => ""
 		};
@@ -55,26 +66,26 @@ impl Writable for ClassPkg {
 		writeln!(w, "\n{desc}\n")?;
 
 		writeln!(w, "## Properties")?;
-		write_sep(Some(self), self.values.as_slice(), w);
+		self.write_sep(self.ty.values.as_slice(), w)?;
 		writeln!(w, "## Functions")?;
-		write_sep(Some(self), self.functions.as_slice(), w);
+		self.write_sep(self.ty.functions.as_slice(), w)?;
 		writeln!(w, "## Methods")?;
-		write_sep(Some(self), self.methods.as_slice(), w);
+		self.write_sep(self.ty.methods.as_slice(), w)?;
 
 		Ok(())
 	}
 }
 
 
-impl Writable for ValuePkg {
-	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()> {
-		let name = self.core.name.as_ref();
+impl<P> Writable<P> for Pkg<Value> where Pkg<P>: Writable {
+	fn write_mkdocs(&self, w: &mut impl Write, _: Option<&Pkg<P>>) -> io::Result<()> {
+		let name = self.name.as_ref();
 		let name_lower = name.to_lowercase();
-		let desc = match self.core.description.as_ref() {
+		let desc = match self.description.as_ref() {
 			Some(s) => s.as_ref(),
 			None => ""
 		};
-		let ty = match self.ty.as_ref() {
+		let ty = match self.ty.ty.as_ref() {
 			Some(ty) => ty.as_ref(),
 			None => "any"
 		};
@@ -98,20 +109,18 @@ r#"
 }
 
 
-impl Writable for FnPkg {
-	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()> {
-		let name = self.core.name.as_ref();
+impl<P> Writable<P> for Pkg<Function> where Pkg<P>: Writable {
+	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&Pkg<P>>) -> io::Result<()> {
+		let name = self.name.as_ref();
 		let name_lower = name.to_lowercase();
-		let desc = match self.core.description.as_ref() {
+		let desc = match self.description.as_ref() {
 			Some(s) => s.as_ref(),
 			None => ""
 		};
-		let parent = match &self.core.parent {
-			Some(p) => p.as_ref(),
-			_ => todo!("Is this even possible?"),
-		};
+		let Some(parent) = parent else {panic!("Error: Parent must be provided!")};
+		let parent_name = parent.name.as_str();
 
-		let arg_names: String = self.args.iter()
+		let arg_names: String = self.ty.args.iter()
 			.map(|a| a.name.as_ref().unwrap().as_ref())
 			.collect::<Vec<_>>()
 			.join(", ");
@@ -124,7 +133,7 @@ r#"
 {desc}
 
 ```lua
-{parent}.{name}({arg_names})
+{parent_name}.{name}({arg_names})
 ```
 
 "#
@@ -134,20 +143,17 @@ r#"
 
 }
 
-impl Writable for MethodPkg {
-	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&impl Writable>) -> io::Result<()> {
-		let name = self.core.name.as_ref();
+impl<P> Writable<P> for Pkg<Method> where Pkg<P>: Writable {
+	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&Pkg<P>>) -> io::Result<()> {
+		let name = self.name.as_ref();
 		let name_lower = name.to_lowercase();
-		let desc = match self.core.description.as_ref() {
+		let desc = match self.description.as_ref() {
 			Some(s) => s.as_ref(),
 			None => ""
 		};
-		let parent = match &self.core.parent {
-			Some(p) => p.as_ref(),
-			_ => todo!("Is this even possible?"),
-		};
-
-		let arg_names: String = self.args.iter()
+		let Some(parent) = parent else {panic!("Error: Parent must be provided!")};
+		let parent_name = parent.name.as_ref();
+		let arg_names: String = self.ty.args.iter()
 			.map(|a| a.name.as_ref().unwrap().as_ref())
 			.collect::<Vec<_>>()
 			.join(", ");
@@ -160,7 +166,7 @@ r#"
 {desc}
 
 ```lua
-{parent}:{name}({arg_names})
+{parent_name}:{name}({arg_names})
 ```
 
 "#
