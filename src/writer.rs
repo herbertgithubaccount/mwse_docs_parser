@@ -19,6 +19,7 @@ const LUA_COMMENT_HEADER: &'static [u8; 164] = br#"--[[
 "#;
 
 
+// used to be a trait but that is a bit too restrictive
 // pub trait Writable {
 // 	/// Write the mkdocs documentation
 // 	fn write_mkdocs(&self, w: &mut impl Write, parent: Option<&PkgCore>) -> io::Result<()>;
@@ -105,32 +106,7 @@ fn write_search_terms(w: &mut impl Write, name: &str, trimmed_name: &str) -> io:
 
 
 impl ClassPkg {
-	// pub async fn write_mkdocs<'a, W: Unpin + AsyncWriteExt>(&'a self, w: &'a mut W, class_map: Arc<HashMap<&'a str, &'a ClassPkg>>) -> io::Result<()> {
-	// 	let mut buf: Vec<u8> = Vec::new();
-	// 	buf.extend_from_slice(MKDOCS_COMMENT_HEADER);
-	// 	// write!(&mut buf, MKDOCS_COMMENT_HEADER)?;
-	// 	// w.write(MKDOCS_COMMENT_HEADER).await?;
-	// 	let name = self.core.name.as_ref();
-	// 	let desc = match &self.core.description {
-	// 		Some(d) => d.as_ref(),
-	// 		None => ""
-	// 	};
-
-	// 	writeln!(&mut buf, "# {name}")?;
-	// 	write_search_terms(&mut buf, name, trimmed_cls_name!(self.core.name.as_str()))?;
-		
-	// 	writeln!(&mut buf, "\n{desc}\n")?;
-	// 	let (values, functions, methods) = self.get_all_values(class_map.as_ref());
-
-	// 	write_separated!(self, values.as_slice(), &mut buf, "## Properties\n\n")?;
-	// 	write_separated!(self, functions.as_slice(), &mut buf, "## Functions\n\n")?;
-	// 	write_separated!(self, methods.as_slice(), &mut buf, "## Methods\n\n")?;
-	// 	// debug!("about to write buffer: {buf:?}");
-	// 	w.write(&mut buf).await?;
-		
-
-	// 	Ok(())
-	// }
+	// todo: make this async
 	pub fn write_mkdocs<W: Write>(&self, w: &mut W, class_map: &HashMap<&str, &ClassPkg>) -> io::Result<()> {
 		w.write(MKDOCS_COMMENT_HEADER)?;
 		// w.write(MKDOCS_COMMENT_HEADER).await?;
