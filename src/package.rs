@@ -1,10 +1,12 @@
 
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, path::{Component, Path, PathBuf}};
 
 use derive_more::{From, TryInto};
+
+use crate::{lex::Lit, NAMED_TYPES_PATH_OUT};
 // use log::debug;
 
-use crate::lex::Lit;
+// use crate::{lex::Lit, GLOBALS_PATH_OUT, NAMED_TYPES_PATH_OUT};
 
 
 #[derive(Debug, Clone)]
@@ -48,6 +50,14 @@ pub struct PkgCore {
 }
 
 impl PkgCore {
+
+	pub fn new_from_path(path: Box<Path>) -> Self {
+		let fname = path.file_name().unwrap().to_str().unwrap();
+		debug_assert!(fname.ends_with(".lua"));
+		let name: Box<str> = Box::from(&fname[..fname.len() - 4]);
+		PkgCore{ path, name, description: None, experimental: false, examples: None, deprecated: false, }
+	}
+	
 	pub fn namespace(&self) -> String {
 		let parts: Vec<&str> = self.path.components()
 			.map(|c| c.as_os_str().to_str().unwrap())
@@ -58,6 +68,12 @@ impl PkgCore {
 		} else {
 			String::new()
 		}
+	}
+
+	/// Gets the relative part of the path of this file.
+	/// For example, `docs/namedTypes/tes3mobilePlayer.lua` becomes `tesmobilePlayer.lua`.
+	pub fn relative_path(&self) -> impl Iterator<Item = Component> {
+		self.path.components().skip(2)
 	}
 }
 
@@ -107,7 +123,7 @@ impl EPkg {
 // =============================================================================
 
 /// Stores an argument / return value of a function.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FnArg {
 	pub name: Option<Box<str>>,
 	pub ty: Option<Box<str>>,
@@ -238,6 +254,16 @@ impl ClassPkg {
 		methods.sort_by(|a,b| a.core.name.cmp(&b.core.name));
 		(values, functions, methods)
 	}
+
+
+	pub fn mk_docs_out_path(&self) -> PathBuf {
+		let mut path = PathBuf::from(NAMED_TYPES_PATH_OUT);
+		// remove the `globals/namedTypes`
+		path.extend(self.core.path.as_ref().components().skip(2));
+		path.set_extension("md");
+
+		path
+	}
 }
 
 // =============================================================================
@@ -293,6 +319,9 @@ pub struct LibPkg {
 }
 
 impl LibPkg {
+
+	pub const MKDOCS_PATH_OUT: &'static str = "output/apis";
+
 	pub fn new(core: PkgCore, link: Option<Box<str>>) -> Self {
 		Self { core, link, sublibs: vec![], functions: vec![], values: vec![] }
 	}
@@ -309,6 +338,15 @@ impl LibPkg {
 		values.sort_by(|a,b| a.core.name.cmp(&b.core.name));
 		functions.sort_by(|a,b| a.core.name.cmp(&b.core.name));
 		(values, functions)
+	}
+
+	pub fn mkdocs_out_path(&self) -> PathBuf {
+		let mut path = PathBuf::from(Self::MKDOCS_PATH_OUT);
+		// remove the `globals/namedTypes`
+		path.extend(self.core.path.as_ref().components().skip(2));
+		path.set_extension("md");
+
+		path
 	}
 }
 

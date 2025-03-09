@@ -9,21 +9,32 @@
 #![feature(ptr_as_ref_unchecked)]
 #![feature(never_type)]
 #![feature(str_as_str)]
+#![feature(iterator_try_collect)]
 
 mod lex;
 
 mod parse;
 mod writer;
 pub mod package;
-pub mod error;
+pub mod result;
 use std::{collections::{HashMap, HashSet}, path::PathBuf, pin::Pin, sync::Arc};
 
-use error::Error;
+use result::Error;
 use log::{debug, error, info, trace, warn};
 use package::{ClassPkg, EPkg, EventPkg};
 pub use parse::*;
 use tokio::task::JoinHandle;
 // use writer::Writable;
+
+
+pub const NAMED_TYPES_PATH_IN: &'static str = "docs/namedTypes";
+pub const GLOBALS_PATH_IN: &'static str = "docs/global";
+pub const EVENTS_PATH_IN: &'static str = "docs/events/standard";
+pub const NAMED_TYPES_PATH_OUT: &'static str = "output/types";
+pub const GLOBALS_PATH_OUT: &'static str = "output/apis";
+pub const EVENTS_PATH_OUT: &'static str = "output/events";
+
+
 
 
 // struct DirPackage
@@ -162,10 +173,6 @@ pub struct DocPackages {
 	pub events: Vec<EventPkg>,
 }
 
-const NAMED_TYPES_PATH: &'static str = "docs/namedTypes";
-const GLOBALS_PATH: &'static str = "docs/global";
-const EVENTS_PATH: &'static str = "docs/events/standard";
-
 impl DocPackages {
 
 
@@ -173,8 +180,8 @@ impl DocPackages {
 
 		// stores all the class packages from `namedTypes`
 		let tys_h = tokio::spawn(async {
-			info!("Loading {NAMED_TYPES_PATH:?}...");
-			let mut stream = tokio::fs::read_dir(NAMED_TYPES_PATH).await?;
+			info!("Loading {NAMED_TYPES_PATH_IN:?}...");
+			let mut stream = tokio::fs::read_dir(NAMED_TYPES_PATH_IN).await?;
 			let mut classes = Vec::new();
 
 			let mut file_handles = Vec::new();
@@ -194,11 +201,17 @@ impl DocPackages {
 			// println!("read {num_read} files");
 			return Ok(classes);
 		});
+
+		// match tys_h.await? {
+		// 	Err(e) => println!("error: {e:?}"),
+		// 	_ => (),
+		// }
+		// panic!();
 		
-		// stores all the globals from `globals`
+		// // stores all the globals from `globals`
 		let globs_h: JoinHandle<Result<Vec<EPkg>, Error>> = tokio::spawn(async {
-			info!("Loading {GLOBALS_PATH:?}...");
-			let mut stream = tokio::fs::read_dir(GLOBALS_PATH).await?;
+			info!("Loading {GLOBALS_PATH_IN:?}...");
+			let mut stream = tokio::fs::read_dir(GLOBALS_PATH_IN).await?;
 			let mut pkgs = Vec::new();
 
 			let mut file_handles = Vec::new();
@@ -218,8 +231,8 @@ impl DocPackages {
 
 		// stores all the events from `events/standard`
 		let evs_h = tokio::spawn(async {
-			info!("Loading {EVENTS_PATH:?}...");
-			let mut stream = tokio::fs::read_dir(EVENTS_PATH).await?;
+			info!("Loading {EVENTS_PATH_IN:?}...");
+			let mut stream = tokio::fs::read_dir(EVENTS_PATH_IN).await?;
 			let mut events = Vec::new();
 
 			let mut file_handles = Vec::new();
@@ -239,12 +252,17 @@ impl DocPackages {
 			// println!("read {num_read} files");
 			return Ok(events);
 		});
+		// evs_h.await??;
+		// panic!();
 
 		match (tys_h.await?, globs_h.await?, evs_h.await?) {
 			(Ok(types), Ok(globals), Ok(events)) => {
 				Ok(Self{types, globals, events})
 			},
-			e => panic!("{e:?}")
+			(Err(e), _, _) => panic!("Error processing types: {e:?}"),
+			(_, Err(e), _) => panic!("Error processing globals: {e:?}"),
+			(_, _, Err(e)) => panic!("Error processing events: {e:?}"),
+			// e => panic!("error encountered!")
 		}
 	}
 
@@ -287,13 +305,9 @@ async fn read_and_write() -> Result<(), Error> {
 		for cls in &pkgs.types {
 			// let class_map = Arc::clone(&class_map);
 			// handles.push(tokio::spawn(async move {
-				let mut path = PathBuf::from("output");
-				let parts = cls.core.path.as_ref().components()
-					.skip(2);
-					// .collect();
-					path.push("types");
+				let mut path = PathBuf::from(NAMED_TYPES_PATH_OUT);
+				path.extend(cls.core.path.as_ref().components().skip(2));
 
-				path.extend(parts);
 				let path = path.with_extension("md");
 				std::fs::create_dir_all(path.parent().unwrap())?;
 				info!("writing to path: {path:?}");

@@ -1,34 +1,163 @@
 
-use std::path::Path;
-
+use std::path::PathBuf;
+use std::{ops::FromResidual, path::Path};
+use std::ops::{Residual, Try};
 use log::{debug, log_enabled, trace};
 
-use crate::{error::Error, lex::{Kw, Lit, Punc, Token, TokenIter}, package::{ClassPkg, EPkg, EventDatum, EventLink, EventPkg, Example, FnArg, FunctionPkg, LibPkg, MethodPkg, OperatorPkg, Overload, PkgCore, ValuePkg}};
+use crate::result::DocFormatError;
+use crate::result::{ParseErr, Error};
+use crate::lex::{Kw, Lit, Punc, Token, TokenIter};
+use crate::package::{ClassPkg, EPkg, EventDatum, EventLink, EventPkg, Example, FnArg, FunctionPkg, LibPkg, MethodPkg, OperatorPkg, Overload, PkgCore, ValuePkg};
 use derive_more::Debug;
 
 
-#[derive(Debug, Clone)]
-pub enum ParseErr{
-	BadToken(Token),
-	/// The value for this special identifier was not provided.
-	#[debug("UnspecifiedKeyword{{expected: {_1:?}, got: '{_0:?}'}}")]
-	UnspecifiedKeyword(Option<Token>, Kw),
 
-	#[debug("PuncExpected{{expected: {_1:?}, got: '{_0:?}'}}")]
-	PuncExpected(Option<Token>, Punc),
-	/// A special identifier showed up in a place it shouldn't have.
-	#[debug("UnsupportedKeyword{{expected: {_1:?}, got: '{_0:?}'}}")]
-	UnsupportedKeyword(Option<Token>, Kw),
-	#[debug("Bad Package Type: {_0:?} is not supported.")]
-	BadPkgTy(Box<str>),
-	UnexpectedLit(Lit),
-	UnexpectedIdent(Box<str>),
-	#[debug("InvalidLitType{{kw: {_0:?}, lit: '{_1:?}'}}")]
-	InvalidLitType(Kw, Lit),
-
-	EventDatumNameNotSpecified(Option<Token>),
-
+/// A key to a Lua table corresponding to a documentation file.
+/// This is either a string or a special recognized keyword.
+/// We don't allow booleans to be used to index tables because the documentation currently does not utilize that.
+#[derive(Debug)]
+pub enum Key {
+	/// Custom strings that do not correspond to keywords. These typically appear in the `examples` sections.
+	Str(Box<str>),
+	Num(f64),
+	/// Recognized keywords.
+	Kw(Kw),
 }
+
+impl TryFrom<Key> for Box<str> {
+	type Error = DocFormatError;
+
+	fn try_from(input: Key) -> Result<Self, Self::Error> {
+		match input {
+			Key::Kw(kw) => Ok(kw.boxed_str()),
+			Key::Str(s) => Ok(s),
+			key@Key::Num(_) => Err(DocFormatError::UnexpectedKey { key, msg: "Expected a string or keyword."})
+
+		}
+	}
+}
+
+impl Key {
+	pub fn unwrap_str(self) -> Box<str> {
+		match self {
+			Self::Str(str) => str,
+			t => panic!("Expected string. Got {t:?}")
+		}
+	}
+
+	pub fn unwrap_num(self) -> f64 {
+		match self {
+			Self::Num(f) => f,
+			t => panic!("Expected number. Got {t:?}")
+		}
+	}
+
+	pub fn unwrap_key(self) -> Kw {
+		match self {
+			Self::Kw(kw) => kw,
+			t => panic!("Expected keyword. Got {t:?}")
+		}
+	}
+	pub fn str_or<E>(self, f: impl Fn(Key) -> E) -> Result<Box<str>, E> {
+		match self {
+			Self::Str(inner) => Ok(inner),
+			key => Err(f(key))
+		}
+	}
+	
+	pub fn kw_or<E>(self, f: impl Fn(Key) -> E) -> Result<Kw, E> {
+		match self {
+			Self::Kw(inner) => Ok(inner),
+			key => Err(f(key))
+		}
+	}
+
+	pub fn str_or_msg(self, msg: &'static str) -> Result<Box<str>, DocFormatError> {
+		match self {
+			Self::Str(inner) => Ok(inner),
+			key => Err(DocFormatError::UnexpectedKey { key, msg })
+		}
+	}
+
+	/// Wants a keyword or a string.
+	pub fn try_into_str(self, msg: &'static str) -> Result<Box<str>, DocFormatError> {
+		match self {
+			Self::Str(inner) => Ok(inner),
+			Self::Kw(inner) => Ok(inner.boxed_str()),
+			key => Err(DocFormatError::UnexpectedKey { key, msg })
+		}
+	}
+
+	pub fn num_or_msg(self, msg: &'static str) -> Result<f64, DocFormatError> {
+		match self {
+			Self::Num(inner) => Ok(inner),
+			key => Err(DocFormatError::UnexpectedKey { key, msg })
+		}
+	}
+
+
+	pub fn kw_or_msg(self, msg: &'static str) -> Result<Kw, DocFormatError> {
+		match self {
+			Self::Kw(inner) => Ok(inner),
+			key => Err(DocFormatError::UnexpectedKey { key, msg })
+		}
+	}
+}
+
+
+
+pub type Tbl = Vec<(Key, Val)>;
+pub type Arr = Vec<Val>;
+
+/// A value in a table. Note that this supports all literals except `Nil`, which is ignored.
+#[derive(Debug)]
+pub enum Val {
+	Str(Box<str>),
+	Num(f64),
+	Bool(bool),
+	
+	Arr(Arr),
+	Tbl(Tbl)
+}
+
+impl Val {
+
+	pub fn str_or_msg(self, msg:&'static str) -> Result<Box<str>, DocFormatError> {
+		match self {
+			Self::Str(inner) => Ok(inner),
+			val => Err(DocFormatError::UnexpectedValue { val, msg })
+		}
+	}
+	pub fn num_or_msg(self, msg:&'static str) -> Result<f64, DocFormatError> {
+		match self {
+			Self::Num(inner) => Ok(inner),
+			val => Err(DocFormatError::UnexpectedValue { val, msg })
+		}
+	}
+	pub fn bool_or_msg(self, msg:&'static str) -> Result<bool, DocFormatError> {
+		match self {
+			Self::Bool(inner) => Ok(inner),
+			val => Err(DocFormatError::UnexpectedValue { val, msg })
+		}
+	}
+
+	pub fn arr_or_msg(self, msg: &'static str) -> Result<Arr, DocFormatError> {
+		match self {
+			Self::Arr(inner) => Ok(inner),
+			val => Err(DocFormatError::UnexpectedValue { val, msg })
+		}
+	}
+
+	pub fn tbl_or_msg(self, msg: &'static str) -> Result<Tbl, DocFormatError> {
+		match self {
+			Self::Tbl(inner) => Ok(inner),
+			val => Err(DocFormatError::UnexpectedValue { val, msg })
+		}
+	}
+
+	
+}
+
 
 
 
@@ -38,560 +167,175 @@ macro_rules! expect_punc {
 		$(
 			trace!("expecting punc {:?}", $punc);
 			match $iter.next() {
+				None => do yeet ParseErr::EOI,
 				Some(Token::Punc($punc)) => (),
-				maybe_token => do yeet ParseErr::PuncExpected(maybe_token, $punc)
+				Some(token) => do yeet ParseErr::PuncExpected(token, $punc)
 			}
 		)*
  	};
 }
-
-/// Eats a punctuation if possible. Returns `true` if it got eaten
-fn munch_if_possible(iter: &mut TokenIter, punc: Punc) -> bool {
-	if let Some(Token::Punc(p)) = iter.peek() && *p == punc {
-		iter.next();
-		true
-	} else {
-		false
-	}
-}
-
-
 
 
 pub trait FromTokens: Sized {
 	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr>;
 }
 
-
-/// Creates an example from the tokens. Consumes the path as well.
-impl FromTokens for Example {
-
+impl FromTokens for Key {
 	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
-		let path = match iter.next() {
-			Some(Token::Lit(Lit::Str(s))) => s,
-			Some(Token::Ident(id)) => id,
-			Some(Token::Punc(Punc::LBrace)) => {
-				let path = match iter.next() {
-					Some(Token::Lit(Lit::Str(s))) => s,
-					t =>  do yeet ParseErr::UnspecifiedKeyword(t, Kw::Title),
-				};
+
+		match  iter.next().ok_or(ParseErr::EOI)? {
+			Token::Ident(str) => Ok(Self::Str(str)),
+			Token::Kw(kw) => Ok(Self::Kw(kw)),
+			// Literals must come between square brackets
+			Token::Punc(Punc::LBrace) => {
+
+				let lit = iter.next().ok_or(ParseErr::EOI)?.lit_or(ParseErr::KeyExpected)?;
 				expect_punc!(iter; Punc::RBrace);
-				path
-			},
-			// Some(Token::SpecialIdent(special_ident)) => todo!(),
-			t => do yeet ParseErr::PuncExpected(t, Punc::LBrace)
-		};
-		trace!("got path = {path}");
-		expect_punc!(iter; Punc::Eq, Punc::LBracket);
-
-		let mut title: Option<Box<str>> = None;
-		let mut description: Option<Box<str>> = None;
-		for _ in 1..=2 {
-			match iter.next() {
-				Some(Token::Kw(Kw::Title)) => {
-					expect_punc!(iter; Punc::Eq);
-					title = match iter.next() {
-						Some(Token::Lit(Lit::Str(s))) => Some(s),
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Title),
-					};
-				},
-				Some(Token::Kw(Kw::Description)) => {
-					expect_punc!(iter; Punc::Eq);
-					description = match iter.next() {
-						Some(Token::Lit(Lit::Str(s))) => Some(s),
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Description),
-					};
-				},
-				t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Title),
-			}
-			munch_if_possible(iter, Punc::Comma);
-			if log_enabled!(log::Level::Debug) {
-				debug!("next token is {:?}", iter.peek());
-			}
-			if let Some(Token::Punc(Punc::RBracket)) = iter.peek() {
-				break
-			}
-		}
-		expect_punc!(iter; Punc::RBracket);
-		debug!("next token is {:?}", iter.peek());
-
-		Ok(Example{path, title, description})
-	}
-}
-
-
-impl FromTokens for Vec<Example> {
-	fn from_tokens(iter: &mut TokenIter) -> Result<Vec<Example>, ParseErr> {
-		
-		expect_punc!(iter; Punc::LBracket);
-		
-		let mut examples = Vec::new();
-		
-		loop {
-
-			examples.push(Example::from_tokens(iter)?);
-			munch_if_possible(iter, Punc::Comma);
-
-			if let Some(Token::Punc(Punc::RBracket)) = iter.peek() {
-				iter.next();
-				break
-			}
-		};
-		
-		// expect_punc!(iter; Punc::RBracket);
-		munch_if_possible(iter, Punc::Comma);
-
-		Ok(examples)
-	}
-}
-
-
-
-
-impl FromTokens for Overload {
-	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
-		expect_punc!(iter; Punc::LBracket);
-
-		let mut right_ty: Option<Box<str>> = None;
-		let mut result_ty: Option<Box<str>> = None;
-		let mut description: Option<Box<str>> = None;
-		
-		while let Some(token) = iter.next() {
-
-			// The type of identifier to set.
-			let sp = match token {
-				Token::Kw(sp)  => sp,
-				// End early if we found the closing bracket
-				Token::Punc(Punc::RBracket) => break,
-				_ => do yeet ParseErr::BadToken(token),
-			};
-			trace!("\t\tprocessing {sp:?}");
-
-			expect_punc!(iter; Punc::Eq);
-			// The literal to use when initializing the keyword
-			let lit = match iter.next() {
-				Some(Token::Lit(lit))  => lit,
-				token => do yeet ParseErr::UnspecifiedKeyword(token, sp)
-			};
-
-			match sp {
-				Kw::RightType => {
-					let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::RightType, lit)};
-					right_ty = Some(s);
-					trace!("\tgot name = {right_ty:?}");
-				},
-				Kw::Description => {
-					let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Description, lit)};
-					description = Some(s);
-					trace!("\tgot description = {description:?}");
-
-				},
-				Kw::ResultType => {
-					let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::ResultType, lit)};
-					result_ty = Some(s);
-					trace!("\tgot ty = {result_ty:?}");
-
-				},
-				sp => do yeet ParseErr::UnsupportedKeyword(Some(token), sp),
-			}
-			
-			// consume the next character
-			// This should be a comma or bracket.
-			// Otherwise, we error.
-			match iter.next() {
-				Some(Token::Punc(Punc::Comma)) => continue,
-				Some(Token::Punc(Punc::RBracket)) => break,
-				Some(t) => do yeet ParseErr::BadToken(t),
-				None => do yeet ParseErr::PuncExpected(None, Punc::RBracket)
-			}
-
-		}
-		Ok(Overload{ right_ty, result_ty, description})
-	}
-}
-
-
-impl FromTokens for Vec<Overload> {
-	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
-		
-		expect_punc!(iter; Punc::LBracket);
-		
-		let mut overloads = Vec::new();
-		
-		loop {
-
-			overloads.push(Overload::from_tokens(iter)?);
-			munch_if_possible(iter, Punc::Comma);
-
-			if let Some(Token::Punc(Punc::RBracket)) = iter.peek() {
-				iter.next();
-				break
-			}
-		};
-		
-		// expect_punc!(iter; Punc::RBracket);
-		munch_if_possible(iter, Punc::Comma);
-
-		Ok(overloads)
-	}
-}
-
-
-
-
-
-
-
-
-
-impl FromTokens for FnArg {
-	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
-		
-		expect_punc!(iter; Punc::LBracket);
-		let mut name: Option<Box<str>> = None;
-		let mut ty: Option<Box<str>> = None;
-		let mut optional = false;
-		let mut description: Option<Box<str>> = None;
-		let mut default = None;
-		let mut table_params = None;
-		
-		while let Some(token) = iter.next() {
-
-			// The type of identifier to set.
-			let sp = match token {
-				Token::Kw(sp)  => sp,
-				// End early if we found the closing bracket
-				Token::Punc(Punc::RBracket) => break,
-				_ => do yeet ParseErr::BadToken(token),
-			};
-			trace!("\t\tprocessing {sp:?}");
-
-			expect_punc!(iter; Punc::Eq);
-
-			if sp == Kw::TableParams {
-				table_params = Some(Vec::<FnArg>::from_tokens(iter)?);
-				trace!("\tgot table params = {table_params:?}");
-			} else {
-				// The literal to use when initializing the keyword
-				let lit = match iter.next() {
-					Some(Token::Lit(lit))  => lit,
-					token => do yeet ParseErr::UnspecifiedKeyword(token, sp)
-				};
-
-				match sp {
-					Kw::Name => {
-						let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Name, lit)};
-						name = Some(s);
-						trace!("\tgot name = {name:?}");
-					},
-					Kw::Description => {
-						let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Description, lit)};
-						description = Some(s);
-						trace!("\tgot description = {description:?}");
-
-					},
-					Kw::Optional => {
-						let Lit::Bool(b) = lit else { do yeet ParseErr::InvalidLitType(Kw::Optional, lit)};
-						optional = b;
-						trace!("\tgot optional = {optional:?}");
-
-					},
-					Kw::Type => {
-						let Lit::Str(s) = lit else { do yeet ParseErr::InvalidLitType(Kw::Type, lit)};
-						ty = Some(s);
-						trace!("\tgot ty = {ty:?}");
-
-					},
-					Kw::Default => {
-						default = Some(lit);
-						trace!("\tgot default = {default:?}");
-
-					},
-					Kw::TableParams => unreachable!("already processed table params!"),
-					sp => do yeet ParseErr::UnsupportedKeyword(Some(token), sp),
+				match lit {
+					Lit::Str(str) => Ok(Self::Str(str)),
+					Lit::Num(num) => Ok(Self::Num(num)),
+					lit => Err(ParseErr::UnsupportedKeyType(lit)),
 				}
-			}
-			
-			// consume the next character
-			// This should be a comma or bracket.
-			// Otherwise, we error.
-			match iter.next() {
-				Some(Token::Punc(Punc::Comma)) => continue,
-				Some(Token::Punc(Punc::RBracket)) => break,
-				Some(t) => do yeet ParseErr::BadToken(t),
-				None => do yeet ParseErr::PuncExpected(None, Punc::RBracket)
-			}
-
-		}
-		Ok(FnArg{ name, description, ty, optional, default, table_params })
-
-	}
-}
-
-impl FnArg {
-	pub fn from_valuetype(value_type: Option<Box<str>>) -> Self {
-		Self{ 
-			name: None, 
-			ty: value_type, 
-			optional: false, 
-			description: None, 
-			default: None, 
-			table_params: None
-		}
-	}
-
-	pub fn from_name(name: Option<Box<str>>) -> Self {
-		Self{ 
-			name, 
-			ty: None, 
-			optional: false, 
-			description: None, 
-			default: None, 
-			table_params: None
-		}
-	}
-}
-
-impl FromTokens for Vec<FnArg> {
-
-	/// Parses the list of function arguments, including the opening and closing braces
-	fn from_tokens(iter: &mut TokenIter) -> Result<Vec<FnArg>, ParseErr> {
-		trace!("creating fn args from tokens with peek = {:?}, peek2 = {:?}", iter.peek(), iter.peek2());
-		// if the next character isn't a bracket, return early
-		if !matches!(iter.peek(), Some(Token::Punc(Punc::LBracket))) {
-			// consume it and either return a string or an error
-			match iter.next() {
-				Some(Token::Lit(Lit::Str(ret_name))) => {
-					// doing it this way to avoid a clone
-					return Ok(vec![FnArg::from_name(Some(ret_name))]);
-				}
-				t => do yeet ParseErr::PuncExpected(t, Punc::LBracket)
-			}
-		}
-
-		// Match the second character.
-		match iter.peek2() {
-			// Only situation in which we don't return early.
-			Some(Token::Punc(Punc::LBracket)) => (),
-
-			// Empty list. So eat the two tokens and return.
-			Some(Token::Punc(Punc::RBracket)) => {
-				iter.next();
-				iter.next();
-				return Ok(vec![]);
 			},
-			// Let `FnArg` consume the `{` token.
-			Some(_) => return Ok(vec![FnArg::from_tokens(iter)?]),
-			// TODO: make better error
-			None => do yeet ParseErr::PuncExpected(None, Punc::RBracket),
+			t => Err(ParseErr::KeyExpected(t)),
 		}
+	}
+}
 
-		// At this point, we know there are two LBrackets in a row, so we can parse the array normally.
-		// Eat the first bracket
+/// Internal function used when parsing values.
+/// Parses something as a table of keyvalue pairs
+/// This function assumes that the opening bracket of a table was already consumed.
+/// This function will also consume the closing bracket of a table.
+fn parse_tbl(iter: &mut TokenIter) -> Result<Vec<(Key, Val)>, ParseErr> {
+	let mut pairs = Vec::new();
+
+	if let Token::Punc(Punc::RBracket) = iter.peek().ok_or(ParseErr::EOI)? {
 		iter.next();
-
-
-		let mut args = Vec::new();
-
-
-		// While the next token is not a bracket
-		while !matches!(iter.peek(), Some(Token::Punc(Punc::RBracket))) {
-			args.push(FnArg::from_tokens(iter)?);
-
-			if log_enabled!(log::Level::Trace) {
-				trace!("added function arguments: {:?}", args.last())
-			}
-
-			munch_if_possible(iter, Punc::Comma);
-			
-		}
-		expect_punc!(iter; Punc::RBracket);
-
-		Ok(args)
+		return Ok(pairs);
 	}
-}
 
-
-
-
-impl FromTokens for EventDatum {
-	/// Parses stuff like
-	/// ```lua
-	///	["activator"] = {
-	///		type = "tes3reference",
-	///		readOnly = true,
-	///		description = "The actor attempting to trigger the event.",
-	///	},
-	/// ```
-	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
-		let name = match iter.next() {
-			Some(Token::Lit(Lit::Str(s))) => s,
-			Some(Token::Ident(id)) => id,
-			Some(Token::Punc(Punc::LBrace)) => {
-				let path = match iter.next() {
-					Some(Token::Lit(Lit::Str(s))) => s,
-					t =>  do yeet ParseErr::EventDatumNameNotSpecified(t),
-				};
-				expect_punc!(iter; Punc::RBrace);
-				path
-			},
-			Some(Token::Kw(kw)) => kw.boxed_str(),
-			t => do yeet ParseErr::PuncExpected(t, Punc::LBrace)
-		};
-		expect_punc!(iter; Punc::Eq, Punc::LBracket);
-		let mut ty = None;
-		let mut read_only = false;
-		let mut description = None;
-		let mut default: Option<_> = None;
-		let mut optional = false;
-
-		loop {
-			match iter.next() {
-				Some(Token::Punc(Punc::RBracket)) => break,
-				Some(Token::Kw(Kw::Type)) => {
-					expect_punc!(iter; Punc::Eq);
-					match iter.next() {
-						Some(Token::Lit(Lit::Str(t)))  => ty = Some(t),
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Type),
-					};
-				},
-				Some(Token::Kw(Kw::ReadOnly)) => {
-					expect_punc!(iter; Punc::Eq);
-					match iter.next() {
-						Some(Token::Lit(Lit::Bool(b)))  => read_only = b,
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::ReadOnly),
-					};
-				},
-				Some(Token::Kw(Kw::Description)) => {
-					expect_punc!(iter; Punc::Eq);
-					match iter.next() {
-						Some(Token::Lit(Lit::Str(desc)))  => description = Some(desc),
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Description),
-					};
-				},
-				Some(Token::Kw(Kw::Default)) => {
-					expect_punc!(iter; Punc::Eq);
-					match iter.next() {
-						Some(Token::Lit(lit))  => default = Some(lit),
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Default),
-					};
-				},
-				Some(Token::Kw(Kw::Optional)) => {
-					expect_punc!(iter; Punc::Eq);
-					match iter.next() {
-						Some(Token::Lit(Lit::Bool(b)))  => optional = b,
-						t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Optional),
-					};
-				},
-				Some(t) => do yeet ParseErr::UnspecifiedKeyword(Some(t), Kw::EventData),
-				None => do yeet ParseErr::UnspecifiedKeyword(None, Kw::EventData),
-			}
-			munch_if_possible(iter, Punc::Comma);
-		}
-		// iter.next();
-
-		Ok(Self{name, ty, read_only, description, default, optional})
+	loop {
+		let key = Key::from_tokens(iter)?;
 		
-	}
-}
-impl FromTokens for Vec<EventDatum> {
-	/// Parses stuff like
-	/// ```lua
-	/// eventData = {
-	///		["activator"] = {
-	///			type = "tes3reference",
-	///			readOnly = true,
-	///			description = "The actor attempting to trigger the event.",
-	///		},
-	///		["target"] = {
-	///			type = "tes3reference",
-	///			readOnly = true,
-	///			description = "The reference that is being activated.",
-	///		},
-	/// }
-	/// ```
-	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
-		expect_punc!(iter; Punc::LBracket);
-		
-		let mut event_data = Vec::new();
-		
-		loop {
-
-			event_data.push(EventDatum::from_tokens(iter)?);
-			munch_if_possible(iter, Punc::Comma);
-
-			if let Some(Token::Punc(Punc::RBracket)) = iter.peek() {
-				iter.next();
-				break
-			}
-		};
-		
-		// expect_punc!(iter; Punc::RBracket);
-		munch_if_possible(iter, Punc::Comma);
-
-		Ok(event_data)
-	}
-}
-
-impl FromTokens for EventLink {
-	/// parses something like 
-	/// ```lua
-	///# links = {
-	///		["xActivate"] = "mwscript/functions/actor/xActivate",
-	///# }
-	/// ```
-	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
-		
-		
-		let name = match iter.next() {
-			Some(Token::Lit(Lit::Str(s))) => s,
-			Some(Token::Ident(id)) => id,
-			Some(Token::Punc(Punc::LBrace)) => {
-				let path = match iter.next() {
-					Some(Token::Lit(Lit::Str(s))) => s,
-					t =>  do yeet ParseErr::UnspecifiedKeyword(t, Kw::Name),
-				};
-				expect_punc!(iter; Punc::RBrace);
-				path
-			},
-			t => do yeet ParseErr::PuncExpected(t, Punc::LBrace)
-		};
-
 		expect_punc!(iter; Punc::Eq);
-		let path = match iter.next() {
-			Some(Token::Lit(Lit::Str(path))) => path,
-			token => do yeet ParseErr::UnspecifiedKeyword(token, Kw::Link)
-		};
 
-		Ok(Self{name, path: path})
-	}
-}
+		if let Some(val) = Option::<Val>::from_tokens(iter)? {
+			pairs.push((key, val));
 
-impl FromTokens for Vec<EventLink> {
-	/// parses something like 
-	/// ```lua
-	///	links = {
-	///		["xActivate"] = "mwscript/functions/actor/xActivate",
-	///	}
-	/// ```
-	fn from_tokens(iter: &mut TokenIter) -> Result<Self, ParseErr> {
-		expect_punc!(iter; Punc::LBracket);
-		
-		let mut links = Vec::new();
-
-		loop {
-			match iter.peek() {
-				Some(Token::Punc(Punc::RBracket)) => break,
-				Some(_) => { links.push(EventLink::from_tokens(iter)?); },
-				None => do yeet ParseErr::UnsupportedKeyword(None, Kw::Links)
-			}
-			munch_if_possible(iter, Punc::Comma);
 		}
 
-		expect_punc!(iter; Punc::RBracket);
-		Ok(links)
+		match iter.next().ok_or(ParseErr::EOI)? {
+			Token::Punc(Punc::RBracket) => break,
+			Token::Punc(Punc::Comma) => {
+				if let Token::Punc(Punc::RBracket) = iter.peek().ok_or(ParseErr::EOI)? {
+					iter.next();
+					break
+				}
+			},
+			t => return Err(ParseErr::PuncExpected(t, Punc::Comma))
+		}
+
+
+
+		// if let Token::Punc(Punc::RBracket) = iter.peek()?
+	}
+	Ok(pairs)
+}
+
+/// Internal function used when parsing values.
+/// Parses something as an array of values.
+/// This function assumes that the opening bracket of an array was already consumed.
+/// This function will also consume the closing bracket of an array.
+fn parse_arr(iter: &mut TokenIter) -> Result<Vec<Val>, ParseErr> {
+	let mut vals = Vec::new();
+
+	if let Token::Punc(Punc::RBracket) = iter.peek().ok_or(ParseErr::EOI)? {
+		iter.next();
+		return Ok(vals);
 	}
 
+	loop {
+		match Option::<Val>::from_tokens(iter)? {
+			Some(val) => vals.push(val),
+			None => ()
+		}
+
+		match iter.next().ok_or(ParseErr::EOI)? {
+			Token::Punc(Punc::RBracket) => break,
+			Token::Punc(Punc::Comma) => {
+				if let Token::Punc(Punc::RBracket) = iter.peek().ok_or(ParseErr::EOI)? {
+					iter.next();
+					break
+				}
+			},
+			t => return Err(ParseErr::PuncExpected(t, Punc::Comma))
+		}
+	}
+	Ok(vals)
+}
+
+
+impl FromTokens for Option<Val> {
+	fn from_tokens(iter: &mut TokenIter) -> Result<Option<Val>, ParseErr> {
+		match iter.next().ok_or(ParseErr::EOI)? {
+			Token::Lit(lit) => {
+				match lit {
+					Lit::Str(v) => Ok(Some(Val::Str(v))),
+					Lit::Num(v) => Ok(Some(Val::Num(v))),
+					Lit::Bool(v) => Ok(Some(Val::Bool(v))),
+					Lit::Nil => Ok(None),
+				}
+				// Ok(Self::Lit(lit))
+			},
+			
+			Token::Punc(Punc::LBracket) => {
+				// Check for an equals sign. This determines whether we are parsing a table or array.
+				if matches!(iter.peek(), Some(Token::Punc(Punc::LBrace)))
+				|| matches!(iter.peek2(), Some(Token::Punc(Punc::Eq)))
+				{
+					parse_tbl(iter).map(|v| Some(Val::Tbl(v)))
+				} else {
+					parse_arr(iter).map(|v| Some(Val::Arr(v)))
+				}
+				// match iter.peek2().ok_or(ParseErr::EOI)? {
+				// 	Token::Punc(Punc::Eq) => 
+				// 	_ => ,
+				// }
+			},
+
+			t => Err(ParseErr::ValExpected(t))
+
+
+		}
+	}
+}
+
+/// Stores the path to a lua file as well as its parsed contents.
+#[derive(Debug)]
+pub struct LuaFile {
+	/// The path that this lua file originated from.
+	/// For our purposes it is useful to have this be remembered by the struct.
+	pub path: Box<Path>,
+	pub contents: Tbl,
+}
+
+
+impl LuaFile {
+	#[inline(always)]
+	fn from_path_contents(path: Box<Path>, contents: &str) -> Result<Self, Error> {
+		let mut iter = TokenIter::from_input(contents)?;
+		iter.expect_punc(Punc::Return)?;
+
+		match Option::<Val>::from_tokens(&mut iter)? {
+			Some(Val::Tbl(tbl)) => Ok(Self{path, contents: tbl}),
+			v => panic!("file was not a table! instead it was {v:?}"),
+		}
+
+	}
+	pub async fn from_path(path: Box<Path>) -> Result<Self, Error> {
+		let contents = tokio::fs::read_to_string(&path).await?;
+		Self::from_path_contents(path, &contents)
+	}
 }
 
 
@@ -599,281 +343,380 @@ impl FromTokens for Vec<EventLink> {
 
 
 
+// =============================================================================
+// PARSE TO OUR STRUCTS
+// =============================================================================
+
+impl Example {
+	pub fn from_tbl_entry(key: Key, val: Val) -> Result<Self, DocFormatError> {
+		let path = key.try_into_str("path must be a string!")?;
+		let pairs = val.tbl_or_msg("Examples must be given as a table!")?;
+
+		let mut title = None;
+		let mut description = None;
+		for (key, val) in pairs {
+
+			let kw = key.kw_or_msg("Expected `title` or `description`.")?;
+
+			let str = val.str_or_msg("[Example] string expected!")?;
+
+			match kw {
+				Kw::Title => title = Some(str),
+				Kw::Description => description = Some(str),
+				_ => kw.unsuported("Example")?
+
+			}
+		}
+		Ok(Self{ path, title, description })
+	}
+}
 
 
+fn parse_arg(pairs: Tbl) -> Result<FnArg, DocFormatError> {
+	let mut name = None;
+	let mut description = None;
+	let mut default = None;
+	let mut ty = None;
+	let mut optional = false;
+	let mut table_params = None;
+	for (key, val) in pairs {
+
+		let kw = key.kw_or_msg("Invalid specifier for function arguments/returns. Expected `name`, `description`, `default`, `type`, `optional`, or `tableParams`.")?;
+
+		match kw {
+			Kw::Name => name = Some(val.str_or_msg("`name` must be a string!")?),
+			Kw::Description => description = Some(val.str_or_msg("`description` must be a string!")?),
+			Kw::Type => ty = Some(val.str_or_msg("`type` must be a string!")?),
+			
+			Kw::Default => {
+				match val {
+					Val::Str(v) => default = Some(Lit::Str(v)),
+					Val::Num(v) => default = Some(Lit::Num(v)),
+					Val::Bool(v) => default = Some(Lit::Bool(v)),
+					Val::Arr(_) => return Err(DocFormatError::UnexpectedValue { val, msg: "Default value must be a primitive type!" }),
+					Val::Tbl(_) => return Err(DocFormatError::UnexpectedValue { val, msg: "Default value must be a primitive type!" }),
+				}
+			},
+			Kw::Optional => optional = val.bool_or_msg("`optional` must be a boolean!`")?,
+			Kw::TableParams => table_params = Some(process_fn_args(val)?),
+			
+			kw => kw.unsuported("arguments/returns")?
+		}
+	}
+	Ok(FnArg{ name, description, default, ty, optional, table_params })
+}
+
+fn process_fn_args(val: Val) -> Result<Vec<FnArg>, DocFormatError> {
+	match val {
+		
+		Val::Arr(arr) => {
+			let mut fns = Vec::with_capacity(arr.len());
+			for v in arr {
+				fns.push(parse_arg(v.tbl_or_msg("must be table!")?)?);
+			}
+			Ok(fns)
+		},
+		Val::Tbl(defn) => Ok(vec![parse_arg(defn)?]),
+		Val::Str(name) => Ok(vec![FnArg{name: Some(name), ..Default::default()}]),
+		_ => todo!("unexpected val: {val:?}"),
+	}
+}
 
 
-// fn parse_example(iter: &mut TokenIter, path: &str) -> Result<Example, ParseErr> {
-// 	expect_punc!(iter; Punc::LBracket);
-// 	let mut title = None;
-// 	let mut description = None;
-// }
+fn parse_overload(pairs: Tbl) -> Result<Overload, DocFormatError> {
+	let mut description = None;
+	let mut right_ty = None;
+	let mut result_ty = None;
+	for (key, val) in pairs {
+
+		let kw = key.kw_or_msg("Invalid specifier for function arguments/returns. Expected `description`, `result_ty`, or `right_ty`.")?;
+
+		match kw {
+			Kw::RightType => right_ty = Some(val.str_or_msg("`right_ty` must be a string!")?),
+			Kw::Description => description = Some(val.str_or_msg("`description` must be a string!")?),
+			Kw::ResultType => result_ty = Some(val.str_or_msg("`right_ty` must be a string!")?),
+			kw => kw.unsuported("overload")?
+		}
+	}
+	Ok(Overload{description, right_ty, result_ty})
+}
+
+fn process_overloads(val: Val) -> Result<Vec<Overload>, DocFormatError> {
+	match val {
+		Val::Str(_) => todo!(),
+		Val::Num(_) => todo!(),
+		Val::Bool(_) => todo!(),
+		Val::Arr(arr) => {
+			let mut overloads = Vec::with_capacity(arr.len());
+			for v in arr {
+				overloads.push(parse_overload(v.tbl_or_msg("overload must be a table!")?)?);
+			}
+			Ok(overloads)
+		},
+		Val::Tbl(pairs) => Ok(vec![parse_overload(pairs)?]),
+	}
+}
+
+/// Parses stuff like
+/// ```lua
+///	["activator"] = {
+///		type = "tes3reference",
+///		readOnly = true,
+///		description = "The actor attempting to trigger the event.",
+///	},
+/// ```
+fn parse_event_datum(key: Key, val: Val) -> Result<EventDatum, DocFormatError> {
+	// println!("got key: {key:?}");
+	let tbl = val.tbl_or_msg("must be table!")?;
+	// key.unwrap_str();
+	// panic!();
+	// let name = key.str_or_msg("event data name must be string!")?;
+	let name = match key {
+		Key::Str(s) => s,
+		Key::Kw(kw) =>kw.boxed_str(),
+		Key::Num(_) => todo!(),
+	};
+	// let name = key.unwrap_str();
+	let mut description = None;
+	let mut ty = None;
+
+	let mut read_only = false;
+	let mut optional = false;
+
+	let mut default: Option<_> = None;
+
+	for (key, val) in tbl {
+		// println!("\tmatching ({key:?}, {val:?})");
+		match key.kw_or_msg("!!")? {
+			Kw::Description => description = Some(val.str_or_msg("!!")?),
+			Kw::Type => ty = Some(val.str_or_msg("!!")?),
+
+			Kw::ReadOnly => read_only = val.bool_or_msg("!!")?,
+			Kw::Optional => optional = val.bool_or_msg("!!")?,
+
+			Kw::Default => default = match val {
+				Val::Num(n) => Some(Lit::Num(n)),
+				Val::Str(n) => Some(Lit::Str(n)),
+				Val::Bool(n) => Some(Lit::Bool(n)),
+				_ => panic!("bad val type for default eventdata: {val:?}"),
+			},
+			kw => panic!("bad keyword in event data: {kw:?}")
+		}
+	}
+	// println!("\treturning");
+
+	Ok(EventDatum{name, ty, read_only, optional, default, description})
+}
+
+
+fn process_event_data(val: Val) -> Result<Vec<EventDatum>, DocFormatError> {
+	let tbl = val.tbl_or_msg("blah")?;
+	let mut data = Vec::with_capacity(tbl.len());
+	
+	for (k, v) in tbl {
+		data.push(parse_event_datum(k, v)?);
+	}
+	Ok(data)
+}
+
+macro_rules! set_bool {
+	($id:ident <- $val:ident) => {
+		$id = $val.bool_or_msg(concat!(stringify!($id), " must be a bool!"))?;
+	};
+}
+macro_rules! set_mstr {
+	($id:ident <- $val:ident) => {
+		$id = Some($val.str_or_msg(concat!(stringify!($id), " must be a string!"))?);
+	};
+}
 
 
 
 
 impl EPkg {
 
+fn from_lua_file(file: LuaFile) -> Result<Self, DocFormatError> {
 
-	fn from_tokens(iter: &mut TokenIter, path: &Path) -> Result<Self, ParseErr> {
+	let contents = file.contents;
+
+	// Core values
+	
+
+	let mut description = None;
+	let mut experimental: bool = false;
+	let mut deprecated: bool = false;
+	let mut examples:  Option<Vec<Example>> = None;
+
+	let mut file_type_str: Option<Box<str>> = None;
+
+
+	
+	// value specific
+	let mut valuetype = None;
+	let mut default: Option<Lit> = None;
+
+
+	// function / method specific 
+	let mut args = Vec::new();
+	let mut rets = Vec::new();
+
+
+	// class specific
+	let mut inherits = None;
+	let mut is_abstract = false;
+
+	// value specific
+	let mut read_only = false;
+
+	// libs specific
+	let mut link = None;
+
+	// event specific
+	let mut filter = None;
+	let mut blockable = false;
+	let mut event_data = Vec::new();
+	let mut related: Vec<Box<str>> = Vec::new();
+	let mut links = Vec::new();
+
+	// let mut info = FileInfo{file_type: FileType::Class, description: None};
+
+	// operator specific
+	let mut overloads = Vec::new();
+	for (key, val) in contents {
+		let kw = key.kw_or_msg("only keywords are allowed at the package root.")?;
+		match kw {
+			Kw::Arguments => args = process_fn_args(val)?,
+			Kw::Returns => rets = process_fn_args(val)?,
+			Kw::Overloads => overloads = process_overloads(val)?,
+			
+			Kw::Examples => {
+				let arr = val.tbl_or_msg("Examples must be specified as a table!")?;
+				examples = Some(arr
+					.into_iter()
+					.map(|(k, v)| Example::from_tbl_entry(k, v))
+					.try_collect()?
+				);
+				// examples = Some(Vec::<Example>::from_tokens(iter)?);
+			},
+			Kw::EventData => {
+				let tbl = val.tbl_or_msg("aa!!")?;
+				event_data = Vec::with_capacity(tbl.len());
+				// panic!("processing event data: {:#?}", &tbl[..10]);
+				for (k, v) in tbl {
+					event_data.push(parse_event_datum(k, v)?);
+				}
+			},
+
+			Kw::Type => set_mstr!(file_type_str <- val),
+			Kw::Description => set_mstr!(description <- val),
+			Kw::ValueType => set_mstr!(valuetype <- val),
+			Kw::Inherits => set_mstr!(inherits <- val),
+			Kw::Link => set_mstr!(link <- val),
+			Kw::IsAbstract => set_bool!(is_abstract <- val),
+			Kw::ReadOnly =>set_bool!(read_only <- val),
+			Kw::Deprecated => set_bool!(deprecated <- val),
+			Kw::Experimental =>set_bool!(experimental <- val),
+			Kw::Blockable => set_bool!(blockable <- val),
+			Kw::Filter => set_mstr!(filter <- val),
+
+
+			Kw::Links => {
+				for (k, v) in val.tbl_or_msg("msg")? {
+					links.push(EventLink{
+						name: k.str_or_msg("link name must be a string")?,
+						path: v.str_or_msg("link `path` must be a string!")?
+					});
+				}
+			},
 
 			
-		// Core values
-		let mut core = PkgCore{
-			path: Box::from(path),
-			name: Box::from(path.file_name().unwrap().to_str().unwrap().trim_end_matches(".lua")),
-			description: None,
-			experimental: false,
-			examples: None,
-			deprecated: false,
-		};
 
-
-		// The value type string. Used to make sure we parsed the file correctly.
-		let mut file_type_str: Option<Box<str>> = None;
-
-
-		
-		// value specific
-		let mut valuetype = None;
-		let mut default: Option<Lit> = None;
-
-
-		// function / method specific 
-		let mut args = Vec::new();
-		let mut rets = Vec::new();
-
-
-		// class specific
-		let mut inherits = None;
-		let mut is_abstract = false;
-
-		// value specific
-		let mut read_only = false;
-
-		// libs specific
-		let mut link = None;
-
-		// event specific
-		let mut filter = None;
-		let mut blockable = false;
-		let mut event_data = Vec::new();
-		let mut related: Vec<Box<str>> = Vec::new();
-		let mut links = Vec::new();
-
-		// let mut info = FileInfo{file_type: FileType::Class, description: None};
-
-		// operator specific
-		let mut overloads = Vec::new();
-		
-		expect_punc!(iter; Punc::Return, Punc::LBracket);
-
-		let mut comma_or_bracket_wanted = false;
-
-		while let Some(t) = iter.next() {
-			trace!("parsing token {t:?}");
-			match t {
-
-				Token::Kw(sp) => {
-					comma_or_bracket_wanted = true;
-
-					expect_punc!(iter; Punc::Eq);
-					trace!("\tparsing {t:?} as keyword....");
-					match sp {
-						Kw::Arguments => {
-							args = Vec::<FnArg>::from_tokens(iter)?;
-							trace!("\tparsed fn args = {args:?}");
-						},
-						Kw::Overloads => {
-							overloads = Vec::<Overload>::from_tokens(iter)?;
-							trace!("\tparsed fn args = {overloads:?}");
-						},
-						Kw::Returns => {
-							rets = Vec::<FnArg>::from_tokens(iter)?;
-							trace!("\tparsed fn rets = {args:?}");
-						},
-						
-						Kw::Examples => {
-							core.examples = Some(Vec::<Example>::from_tokens(iter)?);
-						},
-						Kw::EventData => {
-							event_data = Vec::<EventDatum>::from_tokens(iter)?;
-						},
-
-						Kw::Type => {
-							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => file_type_str = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Type)
-							}
-							// expect_punc!(iter; Punc::Comma);
-						}
-						Kw::Description => {
-							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => core.description = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Description)
-							}
-						},
-						Kw::ValueType => {
-							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => valuetype = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::ValueType)
-							}
-						},
-						Kw::Class => todo!(),
-						Kw::Inherits => {
-							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => inherits = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Inherits)
-							}
-						},
-						
-						Kw::Link => {
-							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => link = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Link)
-							}
-						},
-						Kw::Links => {
-							links = Vec::<EventLink>::from_tokens(iter)?;
-						},
-
-						Kw::IsAbstract => {
-							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => is_abstract = b,
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::IsAbstract)
-							}
-						},
-						Kw::ReadOnly => {
-							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => read_only = b,
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::ReadOnly)
-							}
-						},
-
-						Kw::Deprecated => {
-							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => core.deprecated = b,
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Deprecated)
-							}
-						},
-						
-						Kw::Experimental => {
-							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => core.experimental = b,
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Experimental)
-							}
-						},
-						Kw::Blockable => {
-							match iter.next() {
-								Some(Token::Lit(Lit::Bool(b))) => blockable = b,
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Blockable)
-							}
-						},
-						Kw::Filter => {
-							match iter.next() {
-								Some(Token::Lit(Lit::Str(s))) => filter = Some(s),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Filter)
-							}
-						},
-
-						Kw::Default => {
-							match iter.next() {
-								Some(Token::Lit(lit)) => default = Some(lit),
-								t => do yeet ParseErr::UnspecifiedKeyword(t, Kw::Default)
-							}
-						},
-						Kw::Related => {
-							expect_punc!(iter; Punc::LBracket);
-							loop {
-								match iter.next() {
-									Some(Token::Lit(Lit::Str(s))) => {
-										related.push(s);
-										munch_if_possible(iter, Punc::Comma);
-									},
-									Some(Token::Punc(Punc::RBracket)) => {
-										break;
-									},
-									t => do yeet ParseErr::PuncExpected(t, Punc::RBracket),
-								}
-							}
-						},
-						
-						sp => do yeet ParseErr::UnsupportedKeyword(Some(t), sp)
-						// sp => todo!("Support kw: {sp:?}")
-					}
-
-				},
-				
-				Token::Lit(lit) => do yeet ParseErr::UnexpectedLit(lit), 
-				Token::Ident(id) => do yeet ParseErr::UnexpectedIdent(id), 
-
-				Token::Punc(punc) => match punc {
-					Punc::Eq => {
-						todo!()
-					},
-					Punc::Comma => {
-						if comma_or_bracket_wanted {
-							comma_or_bracket_wanted = false;
-							continue;
-						} else {
-							panic!("unexpected comma!");
-						}
-					},
-					Punc::LBrace => todo!(),
-					Punc::RBrace => todo!(),
-					Punc::LBracket => todo!(),
-					Punc::RBracket => {
-						if comma_or_bracket_wanted {
-							comma_or_bracket_wanted = false;
-							continue;
-						// TODO: this is a hacky fix that solves the problem of `COMMA, BRACKET` at the very end
-						// of the file. but surely something better is possible.
-						} else if iter.peek().is_some() {
-							panic!("unexpected bracket!")
-						}
-					},
-					Punc::LParen => todo!(),
-					Punc::RParen => todo!(),
-					_ => todo!()
-				},
-			}
-		}
-
-		let file_type_str = file_type_str.expect("Error: no valuetype specified!");
-
-		// Handle `value` here to avoid a clone later
-		if file_type_str.as_ref() == "value" {
-			return Ok(EPkg::Value(ValuePkg{core, ty: valuetype, default, read_only}));
-		}
-		if valuetype.is_some() {
-			if rets.len() == 0 {
-				rets = vec![FnArg::from_valuetype(valuetype)];
-			} else {
-				assert!(rets.len() == 1, "Error: Cannot specify both valuetype and returns");
-				assert!(rets[0].ty.is_none(), "Error: Cannot specify both valuetype and returns");
-				rets[0].ty = valuetype;
-			}
-		}
-		debug!("returning packagetype {file_type_str}");
-		// TODO: trigger error if value does not match parsed parameters
-		match file_type_str.as_ref() {
-			"class" => Ok(EPkg::Class(ClassPkg::new(core, is_abstract, inherits))),
-			"function" => Ok(EPkg::Function(FunctionPkg{core, args, rets})),
-			"method" => Ok(EPkg::Method(MethodPkg{core, args, rets})),
-			"lib" => Ok(EPkg::Lib(LibPkg::new(core, link))),
-			"event" => Ok(EPkg::Event(EventPkg{core, filter, blockable, event_data, links, related})),
-			"operator" => Ok(EPkg::Operator(OperatorPkg{core, overloads})),
-			_ => do yeet ParseErr::BadPkgTy(file_type_str)
-			// _ => do yeet ParseErr{token}
+			Kw::Default => {
+				match val {
+					Val::Str(v) => default = Some(Lit::Str(v)),
+					Val::Num(v) => default = Some(Lit::Num(v)),
+					Val::Bool(v) => default = Some(Lit::Bool(v)),
+					Val::Arr(_) => return Err(DocFormatError::UnexpectedValue { val, msg: "Default value must be a primitive type!" }),
+					Val::Tbl(_) => return Err(DocFormatError::UnexpectedValue { val, msg: "Default value must be a primitive type!" }),
+				}
+			},
+			Kw::Related => {
+				related = val
+					.arr_or_msg("Related events must be specified as an array")?
+					.into_iter()
+					.map(|v| v.str_or_msg("Related event must be a string!"))
+					.try_collect()?;
+			},
+			kw => todo!("support {kw:?}"),
 		}
 	}
 
-	pub async fn parse_from_file(path: &Path) -> Result<Self, Error> {
-		let input = tokio::fs::read_to_string(path).await?;
-		let mut iter = TokenIter::from_input(&input)?;
+	let core = PkgCore {
+		description, examples, experimental, deprecated,
+		name: {
+			let fname = file.path.file_name().unwrap().to_str().unwrap();
+			debug_assert!(fname.ends_with(".lua"));
+			Box::from(&fname[..fname.len() - 4])
+		},
+		path: file.path
+	};
 
-		EPkg::from_tokens(&mut iter, path)
-			.map_err(Error::Parse)
+	let file_type_str = file_type_str.expect("Error: no valuetype specified!");
+
+	// Handle `value` here to avoid a clone later
+	if file_type_str.as_ref() == "value" {
+		return Ok(EPkg::Value(ValuePkg{core, ty: valuetype, default, read_only}));
+	}
+
+	if valuetype.is_some() {
+		if rets.len() == 0 {
+			rets = vec![FnArg{ty: valuetype, ..Default::default()}];
+		} else {
+			debug_assert!(rets.len() == 1, "Error: Cannot specify both valuetype and returns");
+			debug_assert!(rets[0].ty.is_none(), "Error: Cannot specify both valuetype and returns");
+			rets[0].ty = valuetype;
+		}
+	}
+	debug!("returning packagetype {file_type_str}");
+	// TODO: trigger error if value does not match parsed parameters
+	match file_type_str.as_ref() {
+		"class" => Ok(EPkg::Class(ClassPkg::new(core, is_abstract, inherits))),
+		"function" => Ok(EPkg::Function(FunctionPkg{core, args, rets})),
+		"method" => Ok(EPkg::Method(MethodPkg{core, args, rets})),
+		"lib" => Ok(EPkg::Lib(LibPkg::new(core, link))),
+		"event" => Ok(EPkg::Event(EventPkg{core, filter, blockable, event_data, links, related})),
+		"operator" => Ok(EPkg::Operator(OperatorPkg{core, overloads})),
+		_ => do yeet DocFormatError::BadPkgTy(file_type_str)
+		// _ => do yeet ParseErr{token}
+	}
+}
+
+
+pub async fn parse_from_file(path: &Path) -> Result<Self, Error> {
+	let file = LuaFile::from_path(Box::from(path)).await?;
+	Ok(Self::from_lua_file(file)?)
+}
+}
+
+
+
+#[cfg(test)]
+mod tests {
+
+	use super::*;
+
+	#[test]
+	fn parse_table() -> Result<(), Error> {
+		// let src = r#"{ key = "something" }"#;
+
+		let path = Path::new("docs/events/standard/activate.lua");
+		dbg!(&path);
+		let rt = tokio::runtime::Runtime::new().unwrap();
+		let epkg = rt.block_on(EPkg::parse_from_file(path))?;
+		// println!("parsed: {epkg:#?}");
+
+
+		Ok(())
 
 	}
 }

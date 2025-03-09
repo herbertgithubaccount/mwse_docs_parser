@@ -2,6 +2,9 @@ use std::cell::Cell;
 use std::ops::FromResidual;
 use std::{iter::Peekable, str::CharIndices};
 
+use crate::result::{DocFormatError, ParseErr};
+use crate::result::{LexError};
+
 use derive_more::Debug;
 use std::borrow::Cow;
 
@@ -10,13 +13,24 @@ use log::{debug, trace};
 pub enum Lit {
 	#[debug("{_0:?}")]
 	Str(Box<str>),
-	#[debug("{_0}")]
-	Int(i64),
+	// #[debug("{_0}")]
+	// Int(i64),
 	#[debug("{_0}")]
 	Num(f64),
 	#[debug("{_0}")]
 	Bool(bool),
 	Nil
+}
+
+
+
+impl Lit {
+	// pub fn str_or_msg(self, msg: &'static str) -> Result<Box<str>, DocFormatError> {
+	// 	match self {
+	// 		Self::Str(s) => Ok(s),
+	// 		lit => Err(DocFormatError::UnexpectedValue { val: lit.into(), msg})
+	// 	}
+	// }
 }
 
 // impl std::fmt::Display for Lit<'_> {
@@ -41,7 +55,7 @@ pub enum Kw {
 	Link,			// len = 4
 
 	Value, 			// len = 5
-	Class, 			// len = 5
+	// Class, 			// len = 5
 	Title,			// len = 5
 	Links,			// len = 5,
 
@@ -92,7 +106,7 @@ impl Kw {
 				_ => None,
 			},
 			5 => match ident {
-				"class" => Some(Self::Class),
+				// "class" => Some(Self::Class),
 				"value" => Some(Self::Value),
 				"title" => Some(Self::Title),
 				"links" => Some(Self::Links),
@@ -154,7 +168,7 @@ impl Kw {
 			Self::Type => Box::from("type"),
 			Self::Libs => Box::from("libs"),
 			Self::Link => Box::from("link"),
-			Self::Class => Box::from("class"),
+			// Self::Class => Box::from("class"),
 			Self::Value => Box::from("value"),
 			Self::Title => Box::from("title"),
 			Self::Links => Box::from("links"),
@@ -229,43 +243,57 @@ pub enum Token{
 	Ident(Box<str>),
 	Kw(Kw),
 }
-// impl std::fmt::Display for Token<'_> {
-// 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-// 		match self {
-// 			Token::Lit(lit) => write!(f, "Lit({lit})"),
-// 			Token::Punc(punc) => write!(f, "Punc({punc})"),
-// 			Token::Ident(id) => write!(f, "Ident(\"{id}\")"),
-// 			Token::Kw(kw) => write!(f, "Kw({kw:?})"),
-// 		}
-// 	}
-// }
 
-#[derive(Clone, Debug, Default)]
-pub enum LexError {
-	/// Input ended before we could finish processing a token
-	UnterminatedMultiComment,
-	UnexpectedChar(char),
-	UnterminatedStr(Box<str>),
-	BadEscapeChar(char),
-
-	/// The input ended while we were expecting this character.
-	ExpectedPunc(Punc),
-	/// We cannot process a token because we have already reached the end of the input.
-	#[default]
-	EndOfInput,
-
-	UnexpectedEOI,
-	InvalidNum(Box<str>),
-}
-
-impl std::fmt::Display for LexError {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "{self:?}")
+impl Token {
+	pub fn expect_lit(self) -> Lit {
+		match self {
+			Self::Lit(lit) => lit,
+			t => panic!("Expected lit. Got {t:?}")
+		}
+	}
+	pub fn expect_punc(self) -> Punc {
+		match self {
+			Self::Punc(inner) => inner,
+			t => panic!("Expected punc. Got {t:?}")
+		}
+	}
+	pub fn expect_ident(self) -> Box<str> {
+		match self {
+			Self::Ident(inner) => inner,
+			t => panic!("Expected ident. Got {t:?}")
+		}
+	}
+	pub fn expect_kw(self) -> Kw {
+		match self {
+			Self::Kw(inner) => inner,
+			t => panic!("Expected keyword. Got {t:?}")
+		}
+	}
+	pub fn lit_or<E>(self, f: impl Fn(Token) -> E) -> Result<Lit, E> {
+		match self {
+			Self::Lit(inner) => Ok(inner),
+			t => Err(f(t))
+		}
+	}
+	pub fn punc_or<E>(self, f: impl Fn(Token) -> E) -> Result<Punc, E> {
+		match self {
+			Self::Punc(inner) => Ok(inner),
+			t => Err(f(t))
+		}
+	}
+	pub fn kw_or<E>(self, f: impl Fn(Token) -> E) -> Result<Kw, E> {
+		match self {
+			Self::Kw(inner) => Ok(inner),
+			t => Err(f(t))
+		}
+	}
+	pub fn ident_or<E>(self, f: impl Fn(Token) -> E) -> Result<Box<str>, E> {
+		match self {
+			Self::Ident(inner) => Ok(inner),
+			t => Err(f(t))
+		}
 	}
 }
-
-impl std::error::Error for LexError {}
-
 
 
 type Iter<'a> = Peekable<CharIndices<'a>>;
@@ -417,8 +445,9 @@ fn scan_token_internal<'a>(input: &'a str, iter: &mut Iter<'a>) -> Result<Token,
 			let start = iter.next().unwrap().0;
 
 			match parse_num(input, iter, start) {
-				Ok(Lit::Int(n)) => Ok(Token::Lit(Lit::Int(-n))),
+				// Ok(Lit::Int(n)) => Ok(Token::Lit(Lit::Int(-n))),
 				Ok(Lit::Num(f)) => Ok(Token::Lit(Lit::Num(-f))),
+				// Ok(Lit::Int(n)) => unreachable!("Unless I'm mistaken, parsing to integers is not currently being used."),
 				_ => unreachable!("This should never happen")
 			}
 		},
@@ -535,9 +564,7 @@ impl TokenIter {
 		}
 		Ok(Self::new(tokens))
 	}
-	pub fn as_slice(&self) -> &[Token] {
-		self.iter.as_slice()
-	}
+
 	pub fn new(tokens: Vec<Token>) -> Self {
 		Self {iter: tokens.into_iter() }
 	}
@@ -551,6 +578,15 @@ impl TokenIter {
 	pub fn next(&mut self) -> Option<Token> {
 		self.iter.next()
 	}
+
+	pub fn expect_punc(&mut self, to_be: Punc) -> Result<(), ParseErr> {
+		match self.next() {
+			None => return Err(ParseErr::EOI),
+			Some(Token::Punc(p)) if p == to_be => Ok(()),
+			Some(t) => Err(ParseErr::PuncExpected(t, to_be))
+		}
+	}
+
 }
 
 
