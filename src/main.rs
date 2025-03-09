@@ -81,40 +81,37 @@ fn process_file(path: PathBuf) -> Pin<Box<dyn Send + Sync + Future<Output = Resu
 		// and filling up `children`.
 		// Things are split up in order to optimize the code, since one branch skips over
 		// files that match the examples found in `epkg.core()`, and most files don't have examples.
-		match epkg.core().examples.as_ref() {
-			None => {
-				while let Some(entry) = dir_contents.next_entry().await? {
-					// directories are handled in recursive calls
-					if !entry.file_type().await?.is_file() { continue; }
-					// recursively process any files in this directory
-					if let Ok(epkg) = process_file(entry.path()).await {
-						children.push(epkg);
-					}
-				}
-			},
-			// `epkg` has examples. We shouldn't parse any files that are intended to be examples.
-			Some(examples) => {
-				let to_ignore: HashSet<&str> = examples.iter()
-					.map(|e| e.path.as_str())
-					.collect();
-				while let Some(entry) = dir_contents.next_entry().await? {
-			
-					// directories are handled in recursive calls
-					if !entry.file_type().await?.is_file() { continue; }
-	
-					// Skip something if it corresponds to one of the examples.
-					let path  = entry.path().with_extension("");
-					let filename = path.file_name().unwrap().to_str().unwrap();
-					if to_ignore.contains(filename) {
-						continue;
-					}
-					// recursively process any files in this directory
-					if let Ok(epkg) = process_file(entry.path()).await {
-						children.push(epkg);
-					}
+		if epkg.core().examples.is_empty() {
+			while let Some(entry) = dir_contents.next_entry().await? {
+				// directories are handled in recursive calls
+				if !entry.file_type().await?.is_file() { continue; }
+				// recursively process any files in this directory
+				if let Ok(epkg) = process_file(entry.path()).await {
+					children.push(epkg);
 				}
 			}
-		};
+		} else {
+			let to_ignore: HashSet<&str> = epkg.core().examples.iter()
+				.map(|e| e.path.as_str())
+				.collect();
+
+			while let Some(entry) = dir_contents.next_entry().await? {
+		
+				// directories are handled in recursive calls
+				if !entry.file_type().await?.is_file() { continue; }
+
+				// Skip something if it corresponds to one of the examples.
+				let path  = entry.path().with_extension("");
+				let filename = path.file_name().unwrap().to_str().unwrap();
+				if to_ignore.contains(filename) {
+					continue;
+				}
+				// recursively process any files in this directory
+				if let Ok(epkg) = process_file(entry.path()).await {
+					children.push(epkg);
+				}
+			}
+		}
 
 		// Add the processed children to the parent file, but only if there are any children to add.
 		// We are doing this `len` check in order to avoid triggering the `error`s in the
@@ -343,13 +340,31 @@ async fn read_and_write() -> Result<(), Error> {
 					pkg.write_mkdocs(&mut writer)?;
 				},
 				_ => (),
-				// EPkg::Class(class_pkg) => todo!(),
-				// EPkg::Function(function_pkg) => todo!(),
-				// EPkg::Method(method_pkg) => todo!(),
-				// EPkg::Value(value_pkg) => todo!(),
-				// EPkg::Event(event_pkg) => todo!(),
-				// EPkg::Operator(operator_pkg) => todo!(),
+				
+				EPkg::Class(class_pkg) => todo!(),
+				EPkg::Function(function_pkg) => todo!(),
+				EPkg::Method(method_pkg) => todo!(),
+				EPkg::Value(value_pkg) => todo!(),
+				EPkg::Event(event_pkg) => todo!(),
+				EPkg::Operator(operator_pkg) => todo!(),
 			}
+		}
+		for pkg in &pkgs.events {
+			let mut path = PathBuf::from("output");
+			path.push("events");
+			let parts = pkg.core.path.as_ref().components()
+				.skip(2);
+				// .collect();
+
+			path.extend(parts);
+			let path = path.with_extension("md");
+			std::fs::create_dir_all(path.parent().unwrap())?;
+			info!("writing to path: {path:?}");
+			// for 
+			let mut writer = std::fs::File::create(&path)?;
+			// let mut writer = tokio::fs::File::create(&path).await?;
+
+			pkg.write_mkdocs(&mut writer)?;
 		}
 	}
 	

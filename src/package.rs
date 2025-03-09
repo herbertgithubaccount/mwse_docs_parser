@@ -46,16 +46,41 @@ pub struct PkgCore {
 	
 
 	///A table containing the examples. Keys are the example's name/path to the example file.
-	pub examples:  Option<Vec<Example>>,
+	pub examples:  Vec<Example>,
 }
 
 impl PkgCore {
 
-	pub fn new_from_path(path: Box<Path>) -> Self {
-		let fname = path.file_name().unwrap().to_str().unwrap();
-		debug_assert!(fname.ends_with(".lua"));
-		let name: Box<str> = Box::from(&fname[..fname.len() - 4]);
-		PkgCore{ path, name, description: None, experimental: false, examples: None, deprecated: false, }
+
+	pub fn load_examples(&self) -> Result<Vec<String>, std::io::Error> {
+		if self.examples.len() > 0 {
+			let mut example_strs = Vec::with_capacity(self.examples.len());
+			let mut dir_path = self.path.to_path_buf();
+			dir_path.set_extension("");
+
+			// gonna replace it later
+			for ex in &self.examples {
+				let mut path = dir_path.as_path();
+				let mut ex_path = ex.path.as_ref();
+				while ex_path.starts_with("..\\") {
+					ex_path = &ex_path[3..];
+					path = path.parent().unwrap();
+				}
+				let ex_path = ex_path.replace('\\', "/");
+				let mut path: PathBuf = path.to_path_buf();
+				path.push(&ex_path);
+				path.set_extension("lua");
+				// dir_path.push(ex.path.replace('\\', "/"));
+				// dir_path.set_extension("lua");
+				println!("loading examples from {path:?}\n\texample: {ex:?}\n\tex_path:{ex_path:?}");
+				// path = path.canonicalize()?;
+				example_strs.push(std::fs::read_to_string(&path)?);
+			}
+			Ok(example_strs)
+		} else {
+			Ok(vec![])
+		}
+		
 	}
 	
 	pub fn namespace(&self) -> String {

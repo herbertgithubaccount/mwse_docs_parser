@@ -1,8 +1,6 @@
 
-use std::path::PathBuf;
-use std::{ops::FromResidual, path::Path};
-use std::ops::{Residual, Try};
-use log::{debug, log_enabled, trace};
+use std::path::Path;
+use log::{debug, trace};
 
 use crate::result::DocFormatError;
 use crate::result::{ParseErr, Error};
@@ -273,9 +271,10 @@ fn parse_arr(iter: &mut TokenIter) -> Result<Vec<Val>, ParseErr> {
 	}
 	Ok(vals)
 }
-
-
 impl FromTokens for Option<Val> {
+	
+	/// Parses a value from a token iterator.
+	/// This will only be `None` if `TokenIter.next()` is `Some(Token::Lit(Lit::Nil))`.
 	fn from_tokens(iter: &mut TokenIter) -> Result<Option<Val>, ParseErr> {
 		match iter.next().ok_or(ParseErr::EOI)? {
 			Token::Lit(lit) => {
@@ -347,28 +346,27 @@ impl LuaFile {
 // PARSE TO OUR STRUCTS
 // =============================================================================
 
-impl Example {
-	pub fn from_tbl_entry(key: Key, val: Val) -> Result<Self, DocFormatError> {
-		let path = key.try_into_str("path must be a string!")?;
-		let pairs = val.tbl_or_msg("Examples must be given as a table!")?;
 
-		let mut title = None;
-		let mut description = None;
-		for (key, val) in pairs {
+fn parse_example(key: Key, val: Val) -> Result<Example, DocFormatError> {
+	let path = key.try_into_str("path must be a string!")?;
+	let pairs = val.tbl_or_msg("Examples must be given as a table!")?;
 
-			let kw = key.kw_or_msg("Expected `title` or `description`.")?;
+	let mut title = None;
+	let mut description = None;
+	for (key, val) in pairs {
 
-			let str = val.str_or_msg("[Example] string expected!")?;
+		let kw = key.kw_or_msg("Expected `title` or `description`.")?;
 
-			match kw {
-				Kw::Title => title = Some(str),
-				Kw::Description => description = Some(str),
-				_ => kw.unsuported("Example")?
+		let str = val.str_or_msg("[Example] string expected!")?;
 
-			}
+		match kw {
+			Kw::Title => title = Some(str),
+			Kw::Description => description = Some(str),
+			_ => kw.unsuported("Example")?
+
 		}
-		Ok(Self{ path, title, description })
 	}
+	Ok(Example{ path, title, description })
 }
 
 
@@ -388,15 +386,7 @@ fn parse_arg(pairs: Tbl) -> Result<FnArg, DocFormatError> {
 			Kw::Description => description = Some(val.str_or_msg("`description` must be a string!")?),
 			Kw::Type => ty = Some(val.str_or_msg("`type` must be a string!")?),
 			
-			Kw::Default => {
-				match val {
-					Val::Str(v) => default = Some(Lit::Str(v)),
-					Val::Num(v) => default = Some(Lit::Num(v)),
-					Val::Bool(v) => default = Some(Lit::Bool(v)),
-					Val::Arr(_) => return Err(DocFormatError::UnexpectedValue { val, msg: "Default value must be a primitive type!" }),
-					Val::Tbl(_) => return Err(DocFormatError::UnexpectedValue { val, msg: "Default value must be a primitive type!" }),
-				}
-			},
+			Kw::Default => default = Some(process_default(val)?),
 			Kw::Optional => optional = val.bool_or_msg("`optional` must be a boolean!`")?,
 			Kw::TableParams => table_params = Some(process_fn_args(val)?),
 			
@@ -441,21 +431,6 @@ fn parse_overload(pairs: Tbl) -> Result<Overload, DocFormatError> {
 	Ok(Overload{description, right_ty, result_ty})
 }
 
-fn process_overloads(val: Val) -> Result<Vec<Overload>, DocFormatError> {
-	match val {
-		Val::Str(_) => todo!(),
-		Val::Num(_) => todo!(),
-		Val::Bool(_) => todo!(),
-		Val::Arr(arr) => {
-			let mut overloads = Vec::with_capacity(arr.len());
-			for v in arr {
-				overloads.push(parse_overload(v.tbl_or_msg("overload must be a table!")?)?);
-			}
-			Ok(overloads)
-		},
-		Val::Tbl(pairs) => Ok(vec![parse_overload(pairs)?]),
-	}
-}
 
 /// Parses stuff like
 /// ```lua
@@ -494,12 +469,8 @@ fn parse_event_datum(key: Key, val: Val) -> Result<EventDatum, DocFormatError> {
 			Kw::ReadOnly => read_only = val.bool_or_msg("!!")?,
 			Kw::Optional => optional = val.bool_or_msg("!!")?,
 
-			Kw::Default => default = match val {
-				Val::Num(n) => Some(Lit::Num(n)),
-				Val::Str(n) => Some(Lit::Str(n)),
-				Val::Bool(n) => Some(Lit::Bool(n)),
-				_ => panic!("bad val type for default eventdata: {val:?}"),
-			},
+			Kw::Default => default = Some(process_default(val)?),
+
 			kw => panic!("bad keyword in event data: {kw:?}")
 		}
 	}
@@ -509,24 +480,26 @@ fn parse_event_datum(key: Key, val: Val) -> Result<EventDatum, DocFormatError> {
 }
 
 
-fn process_event_data(val: Val) -> Result<Vec<EventDatum>, DocFormatError> {
-	let tbl = val.tbl_or_msg("blah")?;
-	let mut data = Vec::with_capacity(tbl.len());
-	
-	for (k, v) in tbl {
-		data.push(parse_event_datum(k, v)?);
+fn process_default(val: Val) -> Result<Lit, DocFormatError> {
+	match val {
+		Val::Str(v) => Ok(Lit::Str(v)),
+		Val::Num(v) => Ok(Lit::Num(v)),
+		Val::Bool(v) => Ok(Lit::Bool(v)),
+		_ => return Err(DocFormatError::UnexpectedValue { val, msg: "Default value must be a primitive type!" }),
 	}
-	Ok(data)
 }
-
+/// Macro that assigns the value the identifier if the value is a bool.
+/// Otherwise, returns an error message that says the identifier name must be a bool.
 macro_rules! set_bool {
 	($id:ident <- $val:ident) => {
-		$id = $val.bool_or_msg(concat!(stringify!($id), " must be a bool!"))?;
+		$id = $val.bool_or_msg(concat!(stringify!($id), " must be a bool!"))?
 	};
 }
+/// Macro that assigns the value the identifier if the value is a string.
+/// Otherwise, returns an error message that says the identifier name must be a string.
 macro_rules! set_mstr {
 	($id:ident <- $val:ident) => {
-		$id = Some($val.str_or_msg(concat!(stringify!($id), " must be a string!"))?);
+		$id = Some($val.str_or_msg(concat!(stringify!($id), " must be a string!"))?)
 	};
 }
 
@@ -545,7 +518,7 @@ fn from_lua_file(file: LuaFile) -> Result<Self, DocFormatError> {
 	let mut description = None;
 	let mut experimental: bool = false;
 	let mut deprecated: bool = false;
-	let mut examples:  Option<Vec<Example>> = None;
+	let mut examples:  Vec<Example> = vec![];
 
 	let mut file_type_str: Option<Box<str>> = None;
 
@@ -587,67 +560,64 @@ fn from_lua_file(file: LuaFile) -> Result<Self, DocFormatError> {
 		match kw {
 			Kw::Arguments => args = process_fn_args(val)?,
 			Kw::Returns => rets = process_fn_args(val)?,
-			Kw::Overloads => overloads = process_overloads(val)?,
-			
-			Kw::Examples => {
-				let arr = val.tbl_or_msg("Examples must be specified as a table!")?;
-				examples = Some(arr
-					.into_iter()
-					.map(|(k, v)| Example::from_tbl_entry(k, v))
-					.try_collect()?
-				);
-				// examples = Some(Vec::<Example>::from_tokens(iter)?);
+			Kw::Default => default = Some(process_default(val)?),
+
+			Kw::Type => 		set_mstr!(file_type_str <- val),
+			Kw::Description => 	set_mstr!(description <- val),
+			Kw::ValueType => 	set_mstr!(valuetype <- val),
+			Kw::Inherits => 	set_mstr!(inherits <- val),
+			Kw::Link => 		set_mstr!(link <- val),
+			Kw::IsAbstract => 	set_bool!(is_abstract <- val),
+			Kw::ReadOnly => 	set_bool!(read_only <- val),
+			Kw::Deprecated => 	set_bool!(deprecated <- val),
+			Kw::Experimental => set_bool!(experimental <- val),
+			Kw::Blockable => 	set_bool!(blockable <- val),
+			Kw::Filter => 		set_mstr!(filter <- val),
+
+			Kw::Overloads => overloads = match val {
+				Val::Arr(arr) => {
+					let mut vec = Vec::with_capacity(arr.len());
+					for v in arr {
+						vec.push(parse_overload(v.tbl_or_msg("overload must be a table!")?)?);
+					}
+					vec
+				},
+				Val::Tbl(pairs) => vec![parse_overload(pairs)?],
+				_ => return Err(DocFormatError::UnexpectedValue { val, msg: "Overloads must be a table or array!"})
 			},
-			Kw::EventData => {
-				let tbl = val.tbl_or_msg("aa!!")?;
-				event_data = Vec::with_capacity(tbl.len());
-				// panic!("processing event data: {:#?}", &tbl[..10]);
-				for (k, v) in tbl {
-					event_data.push(parse_event_datum(k, v)?);
-				}
-			},
-
-			Kw::Type => set_mstr!(file_type_str <- val),
-			Kw::Description => set_mstr!(description <- val),
-			Kw::ValueType => set_mstr!(valuetype <- val),
-			Kw::Inherits => set_mstr!(inherits <- val),
-			Kw::Link => set_mstr!(link <- val),
-			Kw::IsAbstract => set_bool!(is_abstract <- val),
-			Kw::ReadOnly =>set_bool!(read_only <- val),
-			Kw::Deprecated => set_bool!(deprecated <- val),
-			Kw::Experimental =>set_bool!(experimental <- val),
-			Kw::Blockable => set_bool!(blockable <- val),
-			Kw::Filter => set_mstr!(filter <- val),
-
-
 			Kw::Links => {
-				for (k, v) in val.tbl_or_msg("msg")? {
+				let tbl = val.tbl_or_msg("Links must be a table!")?;
+				links = Vec::with_capacity(tbl.len());
+				for (k, v) in tbl {
 					links.push(EventLink{
-						name: k.str_or_msg("link name must be a string")?,
+						name: k.str_or_msg("link `name` must be a string")?,
 						path: v.str_or_msg("link `path` must be a string!")?
 					});
 				}
 			},
-
-			
-
-			Kw::Default => {
-				match val {
-					Val::Str(v) => default = Some(Lit::Str(v)),
-					Val::Num(v) => default = Some(Lit::Num(v)),
-					Val::Bool(v) => default = Some(Lit::Bool(v)),
-					Val::Arr(_) => return Err(DocFormatError::UnexpectedValue { val, msg: "Default value must be a primitive type!" }),
-					Val::Tbl(_) => return Err(DocFormatError::UnexpectedValue { val, msg: "Default value must be a primitive type!" }),
+			Kw::Examples => {
+				let arr = val.tbl_or_msg("Examples must be specified as a table!")?;
+				examples = Vec::with_capacity(arr.len());
+				for (k,v) in arr {
+					examples.push(parse_example(k, v)?);
+				}
+			},
+			Kw::EventData => {
+				let tbl = val.tbl_or_msg("aa!!")?;
+				event_data = Vec::with_capacity(tbl.len());
+				for (k, v) in tbl {
+					event_data.push(parse_event_datum(k, v)?);
 				}
 			},
 			Kw::Related => {
-				related = val
-					.arr_or_msg("Related events must be specified as an array")?
-					.into_iter()
-					.map(|v| v.str_or_msg("Related event must be a string!"))
-					.try_collect()?;
+				let arr = val.arr_or_msg("Related events must be specified as an array")?;
+				related = Vec::with_capacity(arr.len());
+				
+				for v in arr {
+					related.push(v.str_or_msg("Related event must be a string!")?);
+				}
 			},
-			kw => todo!("support {kw:?}"),
+			kw => return Err(DocFormatError::UnsupportedKw { kw, tbl_name: "package root" }),
 		}
 	}
 
@@ -713,7 +683,7 @@ mod tests {
 		dbg!(&path);
 		let rt = tokio::runtime::Runtime::new().unwrap();
 		let epkg = rt.block_on(EPkg::parse_from_file(path))?;
-		// println!("parsed: {epkg:#?}");
+		println!("parsed: {epkg:#?}");
 
 
 		Ok(())

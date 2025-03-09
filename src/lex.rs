@@ -51,7 +51,6 @@ pub enum Kw {
 
 	Name, 			// len = 4
 	Type, 			// len = 4
-	Libs,			// len = 4
 	Link,			// len = 4
 
 	Value, 			// len = 5
@@ -101,7 +100,6 @@ impl Kw {
 			4 => match ident {
 				"name" => Some(Self::Name),
 				"type" => Some(Self::Type),
-				"libs" => Some(Self::Libs),
 				"link" => Some(Self::Link),
 				_ => None,
 			},
@@ -166,7 +164,6 @@ impl Kw {
 		match self {
 			Self::Name => Box::from("name"),
 			Self::Type => Box::from("type"),
-			Self::Libs => Box::from("libs"),
 			Self::Link => Box::from("link"),
 			// Self::Class => Box::from("class"),
 			Self::Value => Box::from("value"),

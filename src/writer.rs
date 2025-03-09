@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use log::debug;
 
-use crate::package::{ClassPkg, FnArg, FunctionPkg, LibPkg, MethodPkg, PkgCore, ValuePkg};
+use crate::package::{ClassPkg, EventPkg, Example, FnArg, FunctionPkg, LibPkg, MethodPkg, PkgCore, ValuePkg};
 use std::io::Write;
 use std::io;
 
@@ -311,5 +311,38 @@ impl LibPkg {
 		
 
 		Ok(())
+	}
+}
+
+
+impl EventPkg {
+	pub fn write_mkdocs(&self, w: &mut impl Write) -> io::Result<()> {
+		let example_strs = self.core.load_examples()?;
+
+		if example_strs.len() > 0 {
+			write!(w, "## Examples\n\n")?;
+			for (ex, body) in self.core.examples.iter().zip(&example_strs) {
+				if let Some(title) = &ex.title {
+					write!(w, r#"!!! example "Example: {title}""#)?;
+				} else {
+					w.write(br#"!!! example "Example""#)?;
+				}
+				w.write(b"\n\n")?;
+				
+				if let Some(desc) = &ex.description {
+					let desc = desc.replace("\n", "\n\t");
+					w.write(desc.as_bytes())?;
+					w.write(b"\n\n")?;
+				}
+				let body = body.replace("\n", "\n\t");
+				write!(w, "\t```lua\n\t{body}\n\t```\n\n")?;
+
+			}
+
+		}
+
+		Ok(())
+
+
 	}
 }
